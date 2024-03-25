@@ -50,8 +50,9 @@ def _sno_make_deploy(
 ) -> None:
     rsh = host.LocalHost()
 
-    env = os.environ.copy()
-    env["KUBECONFIG"] = kubeconfig
+    env = {
+        "KUBECONFIG": kubeconfig,
+    }
 
     # cleanup first, to make this script idempotent
     logger.info("running make undeploy")
@@ -139,8 +140,9 @@ def ExtraConfigSriovSubscription(cc: ClustersConfig, cfg: ExtraConfigArgs, futur
     client = K8sClient(cc.kubeconfig)
     lh = host.LocalHost()
 
-    env = os.environ.copy()
-    env["KUBECONFIG"] = client._kc
+    env = {
+        "KUBECONFIG": client._kc,
+    }
 
     # cleanup first, to make this script idempotent
     logger.info("running make undeploy")

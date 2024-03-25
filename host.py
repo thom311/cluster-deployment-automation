@@ -11,6 +11,7 @@ import logging
 import tempfile
 from typing import Optional
 from typing import Union
+from collections.abc import Mapping
 from functools import lru_cache
 from ailib import Redfish
 import paramiko
@@ -322,24 +323,45 @@ class Host:
     def need_sudo(self) -> None:
         self.sudo_needed = True
 
-    def run(self, cmd: str, log_level: int = logging.DEBUG, env: dict[str, str] = os.environ.copy(), quiet: bool = False) -> Result:
+    def run(
+        self,
+        cmd: str,
+        log_level: int = logging.DEBUG,
+        *,
+        env: Optional[Mapping[str, Optional[str]]] = None,
+        quiet: bool = False,
+    ) -> Result:
         if self.sudo_needed:
             cmd = "sudo " + cmd
 
         if not quiet:
             logger.log(log_level, f"running command {cmd} on {self._hostname}")
         if self.is_localhost():
-            ret_val = self._run_local(cmd, env, quiet)
+            ret_val = self._run_local(cmd, env=env, quiet=quiet)
         else:
-            ret_val = self._run_remote(cmd, log_level, quiet)
+            ret_val = self._run_remote(cmd, log_level, env=env, quiet=quiet)
 
         logger.log(log_level, ret_val)
         return ret_val
 
-    def _run_local(self, cmd: str, env: dict[str, str], quiet: bool = False) -> Result:
+    def _run_local(
+        self,
+        cmd: str,
+        *,
+        env: Optional[Mapping[str, Optional[str]]] = None,
+        quiet: bool = False,
+    ) -> Result:
+        full_env: Optional[dict[str, str]] = None
+        if env:
+            full_env = os.environ.copy()
+            for k, v in env.items():
+                if v is None:
+                    full_env.pop(k, None)
+                else:
+                    full_env[k] = v
         args = shlex.split(cmd)
         pipe = subprocess.PIPE
-        with subprocess.Popen(args, stdout=pipe, stderr=pipe, env=env) as proc:
+        with subprocess.Popen(args, stdout=pipe, stderr=pipe, env=full_env) as proc:
             if proc.stdout is None:
                 logger.info("Can't find stdout")
                 sys.exit(-1)
@@ -352,7 +374,14 @@ class Host:
             ret = proc.returncode
         return Result(out, err, ret)
 
-    def _run_remote(self, cmd: str, log_level: int, quiet: bool = False) -> Result:
+    def _run_remote(
+        self,
+        cmd: str,
+        log_level: int,
+        *,
+        env: Optional[Mapping[str, Optional[str]]] = None,
+        quiet: bool = False,
+    ) -> Result:
         def read_output(cmd: str, log_level: int) -> Result:
             assert self._host is not None
             _, stdout, stderr = self._host.exec_command(cmd)
@@ -370,8 +399,20 @@ class Host:
 
             return Result("".join(out), "".join(err), exit_code)
 
+        if env:
+            # Assume we have a POSIX shell, and we can define variables via `export VAR=...`.
+            cmd2 = ""
+            for k, v in env.items():
+                assert k == shlex.quote(k)
+                if v is None:
+                    cmd2 += f"unset  -v {k}\n"
+                else:
+                    cmd2 += f"export {k}={shlex.quote(v)}\n"
+            cmd = cmd2 + cmd
+
         # Make sure multiline command is not seen as multiple commands
         cmd = cmd.replace("\n", "\\\n")
+
         while True:
             try:
                 return read_output(cmd, log_level)
@@ -383,8 +424,13 @@ class Host:
                 logger.log(log_level, f"Connection lost while running command {cmd_str}, reconnecting...")
                 self.ssh_connect_looped(self._logins)
 
-    def run_or_die(self, cmd: str) -> Result:
-        ret = self.run(cmd)
+    def run_or_die(
+        self,
+        cmd: str,
+        *,
+        env: Optional[Mapping[str, Optional[str]]] = None,
+    ) -> Result:
+        ret = self.run(cmd, env=env)
         if ret.returncode:
             logger.error(f"{cmd} failed: {ret.err}")
             sys.exit(-1)
