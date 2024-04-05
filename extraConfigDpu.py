@@ -277,7 +277,7 @@ def ExtraConfigDpuHost(cc: ClustersConfig, cfg: ExtraConfigArgs, futures: dict[s
     start_dpu_operator(lh, client, operator_image, daemon_image)
     client.oc_run_or_die("wait --for=condition=Ready pod --all -n dpu-operator-system --timeout=2m")
 
-    def helper(h: host.Host, node: NodeConfig) -> Optional[host.Result]:
+    def helper(h: host.Host, node: NodeConfig, bmc: host.BMC) -> Optional[host.Result]:
         logger.info(f"Manually creating vfs for host {h.hostname()}")
         # There is a bug with the idpf driver that causes the IPU to fail to be enumerated over PCIe on boot
         # As a result, we will need to trigger cold boots of the node until the device is available
@@ -287,7 +287,7 @@ def ExtraConfigDpuHost(cc: ClustersConfig, cfg: ExtraConfigArgs, futures: dict[s
         ret = h.run(f"test -d /sys/class/net/{cfg.dpu_net_interface}")
         while ret.returncode != 0:
             logger.error(f"{h.hostname()} does not have a network device {cfg.dpu_net_interface} cold booting node to try to recover")
-            h.cold_boot()
+            bmc.cold_boot()
             logger.info("Cold boot triggered, waiting for host to reboot")
             time.sleep(60)
             h.ssh_connect("core")
@@ -311,8 +311,8 @@ def ExtraConfigDpuHost(cc: ClustersConfig, cfg: ExtraConfigArgs, futures: dict[s
     for e in cc.workers:
         logger.info(f"Calling helper function for node {e.node}")
         bmc = host.BMC.from_bmc(e.bmc, e.bmc_user, e.bmc_password)
-        h = host.Host(e.node, bmc)
-        f.append(executor.submit(helper, h, e))
+        h = host.Host(e.node)
+        f.append(executor.submit(helper, h, e, bmc))
 
     for thread in f:
         logger.info(thread.result())
