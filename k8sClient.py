@@ -71,11 +71,20 @@ class K8sClient:
                         return str(addr.address)
         return None
 
-    def oc(self, cmd: str, must_succeed: bool = False) -> host.Result:
+    def oc(self, cmd: str, must_succeed: bool = False, *, with_kubeconfig: Optional[bool] = True) -> host.Result:
         cmd = f"oc {cmd}"
-        env = {
-            "KUBECONFIG": self._kc,
-        }
+
+        env: Optional[dict[str, Optional[str]]]
+        if with_kubeconfig is None:
+            # keep the caller's environment
+            env = None
+        elif with_kubeconfig:
+            # Overwrite the KUBECONFIG variable.
+            env = {"KUBECONFIG": self._kc}
+        else:
+            # Explicitly unset the variable (if set)
+            env = {"KUBECONFIG": None}
+
         return self._host.run(cmd, env=env, die_on_error=must_succeed)
 
     def oc_run_or_die(self, cmd: str) -> host.Result:
