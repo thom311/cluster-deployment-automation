@@ -72,11 +72,11 @@ class K8sClient:
         return None
 
     def oc(self, cmd: str, must_succeed: bool = False) -> host.Result:
-        cmd = f"oc {cmd} --kubeconfig {self._kc}"
-        if must_succeed:
-            return self._host.run_or_die(cmd)
-        else:
-            return self._host.run(cmd)
+        cmd = f"oc {cmd}"
+        env = {
+            "KUBECONFIG": self._kc,
+        }
+        return self._host.run(cmd, env=env, die_on_error=must_succeed)
 
     def oc_run_or_die(self, cmd: str) -> host.Result:
         return self.oc(cmd, must_succeed=True)
