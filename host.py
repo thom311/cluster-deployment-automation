@@ -463,6 +463,8 @@ class Host:
         while True:
             try:
                 return self.ssh_run(self._host, cmd, log_prefix=self._hostname, log_level=log_level)
+            except UnicodeDecodeError:
+                raise
             except Exception as e:
                 logger.log(log_level, e)
                 cmd_str = ""
