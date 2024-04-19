@@ -353,13 +353,15 @@ class Host:
         cmd = self._cmd_to_script(cmd)
 
         if not quiet:
-            logger.log(log_level, f"running command {cmd} on {self._hostname}")
+            logger.log(log_level, f"running command {repr(cmd)} on {self._hostname}")
         if self.is_localhost():
             ret_val = self._run_local(cmd, env=env, quiet=quiet, cwd=cwd)
         else:
             ret_val = self._run_remote(cmd, log_level, env=env, quiet=quiet, cwd=cwd)
 
-        logger.log(log_level, ret_val)
+        status = f"failed (rc={ret_val.returncode})" if ret_val.returncode != 0 else "succeeded"
+        logger.log(log_level, f"command {repr(cmd)} on {self._hostname} {status}{':' if ret_val.out or ret_val.err else ''}{f' out={repr(ret_val.out)};' if ret_val.out else ''}{f' err={repr(ret_val.err)};' if ret_val.err else ''}")
+
         return ret_val
 
     def _run_local(
