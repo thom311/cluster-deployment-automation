@@ -1,3 +1,4 @@
+import common
 import kubernetes
 import yaml
 import time
@@ -72,7 +73,7 @@ class K8sClient:
         time.sleep(60)
         iteration = 0
         max_tries = 10
-        start = time.time()
+        start = time.monotonic()
         while True:
             ret = self.oc(f"wait mcp {mcp_name} --for condition=updated --timeout=20m")
             if ret.returncode == 0:
@@ -83,5 +84,4 @@ class K8sClient:
                 sys.exit(-1)
             iteration = iteration + 1
             time.sleep(60)
-        minutes, seconds = divmod(int(time.time() - start), 60)
-        logger.info(f"It took {minutes}m {seconds}s for {resource} (attempts: {iteration})")
+        logger.info(f"It took {common.seconds_to_str(time.monotonic() - start)} for {resource} (attempts: {iteration})")
