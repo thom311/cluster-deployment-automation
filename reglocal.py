@@ -39,9 +39,9 @@ def ensure_running(rsh: host.Host, *, delete_all: bool = False, listen_port: int
     dir_name = get_local_registry_base_directory(rsh)
     hostname = get_local_registry_hostname(rsh)
 
-    ret = rsh.run(shlex.join(["podman", "inspect", CONTAINER_NAME, "--format", "{{.Id}}"]))
+    ret = rsh.run(["podman", "inspect", CONTAINER_NAME, "--format", "{{.Id}}"])
 
-    if ret.success() and rsh.run(shlex.join(['test', '-d', dir_name])).success():
+    if ret.success() and rsh.run(['test', '-d', dir_name]).success():
         if not delete_all:
             return dir_name, hostname, listen_port, ret.out.strip()
         _delete_all(rsh, dir_name)
@@ -50,72 +50,70 @@ def ensure_running(rsh: host.Host, *, delete_all: bool = False, listen_port: int
     dir_name_data = os.path.join(dir_name, "data")
     dir_name_auth = os.path.join(dir_name, "auth")
 
-    rsh.run(shlex.join(["mkdir", "-p", dir_name]))
-    rsh.run(shlex.join(["mkdir", "-p", dir_name_certs]))
-    rsh.run(shlex.join(["mkdir", "-p", dir_name_data]))
-    rsh.run(shlex.join(["mkdir", "-p", dir_name_auth]))
+    rsh.run(["mkdir", "-p", dir_name])
+    rsh.run(["mkdir", "-p", dir_name_certs])
+    rsh.run(["mkdir", "-p", dir_name_data])
+    rsh.run(["mkdir", "-p", dir_name_auth])
 
-    rsh.run_or_die(
-        shlex.join(
-            [
-                "openssl",
-                "req",
-                "-newkey",
-                "rsa:4096",
-                "-nodes",
-                "-sha256",
-                "-keyout",
-                os.path.join(dir_name_certs, "domain.key"),
-                "-x509",
-                "-days",
-                "365",
-                "-out",
-                os.path.join(dir_name_certs, "domain.crt"),
-                "-subj",
-                f"/CN={hostname}",
-                "-addext",
-                f"subjectAltName = DNS:{hostname}",
-            ]
-        )
+    rsh.run(
+        [
+            "openssl",
+            "req",
+            "-newkey",
+            "rsa:4096",
+            "-nodes",
+            "-sha256",
+            "-keyout",
+            os.path.join(dir_name_certs, "domain.key"),
+            "-x509",
+            "-days",
+            "365",
+            "-out",
+            os.path.join(dir_name_certs, "domain.crt"),
+            "-subj",
+            f"/CN={hostname}",
+            "-addext",
+            f"subjectAltName = DNS:{hostname}",
+        ],
+        die_on_error=True,
     )
 
     # We need both domain.crt and domain.cert for `podman push --cert-dir` to work.
-    rsh.run(shlex.join(["ln", "-snf", "domain.crt", os.path.join(dir_name_certs, "domain.cert")]))
+    rsh.run(["ln", "-snf", "domain.crt", os.path.join(dir_name_certs, "domain.cert")])
 
-    ret = rsh.run_or_die(
-        shlex.join(
-            [
-                "podman",
-                "run",
-                "--name",
-                CONTAINER_NAME,
-                "-p",
-                f"{listen_port}:5000",
-                "-v",
-                f"{dir_name_data}:/var/lib/registry:z",
-                "-v",
-                f"{dir_name_auth}:/auth:z",
-                "-v",
-                f"{dir_name_certs}:/certs:z",
-                "-e",
-                "REGISTRY_HTTP_TLS_CERTIFICATE=/certs/domain.crt",
-                "-e",
-                "REGISTRY_HTTP_TLS_KEY=/certs/domain.key",
-                "-e",
-                "REGISTRY_COMPATIBILITY_SCHEMA1_ENABLED=true",
-                f"--annotation=LOCAL_CONTAINER_REGISTRY_HOSTNAME={hostname}",
-                "-d",
-                "docker.io/library/registry:latest",
-            ]
-        )
+    ret = rsh.run(
+        [
+            "podman",
+            "run",
+            "--name",
+            CONTAINER_NAME,
+            "-p",
+            f"{listen_port}:5000",
+            "-v",
+            f"{dir_name_data}:/var/lib/registry:z",
+            "-v",
+            f"{dir_name_auth}:/auth:z",
+            "-v",
+            f"{dir_name_certs}:/certs:z",
+            "-e",
+            "REGISTRY_HTTP_TLS_CERTIFICATE=/certs/domain.crt",
+            "-e",
+            "REGISTRY_HTTP_TLS_KEY=/certs/domain.key",
+            "-e",
+            "REGISTRY_COMPATIBILITY_SCHEMA1_ENABLED=true",
+            f"--annotation=LOCAL_CONTAINER_REGISTRY_HOSTNAME={hostname}",
+            "-d",
+            "docker.io/library/registry:latest",
+        ],
+        die_on_error=True,
     )
 
     return dir_name, hostname, listen_port, ret.out.strip()
 
 
 def _delete_all(rsh: host.Host, dir_name: str) -> None:
-    rsh.run(shlex.join(["podman", "rm", "-f", CONTAINER_NAME]))
-    rsh.run(shlex.join(["rm", "-rf", dir_name]))
+    rsh.run(["podman", "rm", "-f", CONTAINER_NAME])
+    rsh.run(["rm", "-rf", dir_name])
 
 
 def delete_all(rsh: host.Host) -> None:
