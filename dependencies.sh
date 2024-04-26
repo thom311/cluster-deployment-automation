@@ -11,7 +11,7 @@ else
 fi
 
 $PYTHON_CMD -m ensurepip --upgrade
-$PYTHON_CMD -m pip install PyYAML --ignore-installed
+$PYTHON_CMD -m pip install --upgrade PyYAML --ignore-installed
 
 dnf install -y \
         bash-completion \
@@ -37,6 +37,6 @@ dnf install -y \
 
 systemctl enable osbuild-composer.socket cockpit.socket --now
 
-cat requirements.txt  | xargs -n1 $PYTHON_CMD -m pip install
+cat requirements.txt  | xargs -n1 $PYTHON_CMD -m pip install --upgrade
 
 sudo activate-global-python-argcomplete
