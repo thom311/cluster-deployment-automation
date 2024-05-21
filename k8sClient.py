@@ -3,6 +3,7 @@ import kubernetes
 import yaml
 import time
 import host
+import os
 import sys
 from typing import Optional
 from typing import Callable
@@ -12,12 +13,23 @@ oc_url = "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/"
 
 
 class K8sClient:
-    def __init__(self, kubeconfig: str, host: host.Host = host.LocalHost()):
+    @staticmethod
+    def detect_kubeconfig(kubeconfig: Optional[str]) -> str:
+        if not kubeconfig:
+            kubeconfig = os.environ.get("KUBECONFIG")
+            if not kubeconfig:
+                raise ValueError("No kubeconfig given and KUBECONFIG environment not set")
+        return kubeconfig
+
+    def __init__(self, kubeconfig: Optional[str] = None, rsh: Optional[host.Host] = None):
+        if rsh is None:
+            rsh = host.LocalHost()
+        kubeconfig = K8sClient.detect_kubeconfig(kubeconfig)
         self._kc = kubeconfig
-        c = yaml.safe_load(host.read_file(kubeconfig))
+        c = yaml.safe_load(rsh.read_file(kubeconfig))
         self._api_client = kubernetes.config.new_client_from_config_dict(c)
         self._client = kubernetes.client.CoreV1Api(self._api_client)
-        self._host = host
+        self._host = rsh
 
     def is_ready(self, name: str) -> bool:
         for e in self._client.list_node().items:
