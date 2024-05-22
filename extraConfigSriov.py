@@ -5,7 +5,6 @@ import os
 import time
 from concurrent.futures import Future
 import jinja2
-import shlex
 import sys
 import common
 from typing import Optional
@@ -56,7 +55,7 @@ def _sno_make_deploy(
 
     # cleanup first, to make this script idempotent
     logger.info("running make undeploy")
-    logger.info(rsh.run(shlex.join(["make", "-C", repo_dir, "undeploy"]), env=env))
+    logger.info(rsh.run("make undeploy", env=env, cwd=repo_dir))
 
     client = K8sClient(kubeconfig)
 
@@ -105,7 +104,7 @@ def _sno_make_deploy(
     retry_started_at = time.monotonic()
     while True:
         logger.info(f"running make deploy-setup (env: {deploy_env})")
-        ret = rsh.run(shlex.join(["make", "-C", repo_dir, "deploy-setup"]), env=deploy_env)
+        ret = rsh.run("make deploy-setup", env=deploy_env, cwd=repo_dir)
         if ret.success():
             logger.info(f"completed with success: {ret}")
             break

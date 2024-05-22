@@ -635,7 +635,7 @@ class Host:
         return self._hostname
 
     def home_dir(self, *path_components: str) -> str:
-        ret = self.run("bash -c 'echo -n ~'")
+        ret = self.run("echo -n ~")
         path = ret.out
         if not ret.success() or not path or path[0] != "/":
             raise RuntimeError("Failure getting home directory")
