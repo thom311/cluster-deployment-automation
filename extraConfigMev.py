@@ -6,6 +6,8 @@ from bmc import BMC
 from concurrent.futures import Future
 from typing import Optional
 import time
+from ktoolbox.common import unwrap
+
 
 LATEST_MEV_FW = "1.8.0.10052"
 
@@ -18,7 +20,6 @@ def ExtraConfigMevFwUp(cc: ClustersConfig, cfg: ExtraConfigArgs, futures: dict[s
     master = cc.masters[0]
     assert master.kind == "ipu"
     assert master.host_side_bmc is not None
-    imc = host.Host(master.bmc)
 
     # Check if a particular firmware version is being requested or if we will use default
     if cfg.mev_version == "":
@@ -29,8 +30,9 @@ def ExtraConfigMevFwUp(cc: ClustersConfig, cfg: ExtraConfigArgs, futures: dict[s
     # We should only perform an update if it is required, or if the user insists we do so
     if not cfg.force_mev_fw_up:
         logger.info("Checking if firmware update is required")
+        imc = host.Host(unwrap(master.bmc))
         if imc.ping():
-            imc.ssh_connect(master.bmc_user, master.bmc_password)
+            imc.ssh_connect(unwrap(master.bmc_user), unwrap(master.bmc_password))
             ret = imc.run("cat /etc/issue.net")
             if cfg.mev_version in ret.out:
                 logger.info(f"Current MeV fw version is {ret.out.strip()}, no need to update")
@@ -53,7 +55,7 @@ def ExtraConfigMevFwUp(cc: ClustersConfig, cfg: ExtraConfigArgs, futures: dict[s
     time.sleep(20)
 
     # Access the IMC to validate the flash was successful
-    imc.ssh_connect(master.bmc_user, master.bmc_password)
+    imc = master.create_rhost_bmc()
     ret = imc.run("cat /etc/issue.net")
     if cfg.mev_version not in ret.out or ret.returncode != 0:
         logger.error_and_exit(f"Mev firmware release is not the expected version: {ret.out}")
