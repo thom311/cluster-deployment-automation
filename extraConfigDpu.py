@@ -350,7 +350,7 @@ def ExtraConfigDpuHost(cc: ClustersConfig, cfg: ExtraConfigArgs, futures: dict[s
     # Assuming that all workers have a DPU
     for e in cc.workers:
         logger.info(f"Calling helper function for node {e.node}")
-        bmc = host.BMC.from_bmc(e.bmc, e.bmc_user, e.bmc_password)
+        bmc = e.create_bmc()
         h = host.Host(e.node, bmc)
         f.append(executor.submit(helper, h, e))
 
