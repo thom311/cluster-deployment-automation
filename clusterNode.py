@@ -10,7 +10,6 @@ from typing import Optional
 import common
 import host
 from clustersConfig import NodeConfig
-from host import BMC
 from nfs import NFS
 
 
@@ -112,7 +111,7 @@ class VmClusterNode(ClusterNode):
         disk_size_gb = self.config.disk_size
         if iso_or_image_path.endswith(".iso"):
             options = "-o preallocation="
-            if self.config.is_preallocated():
+            if self.config.preallocated:
                 options += "full"
             else:
                 options += "off"
@@ -202,7 +201,7 @@ class X86ClusterNode(ClusterNode):
         lh = host.LocalHost()
         nfs = NFS(lh, self.external_port)
 
-        bmc = BMC.from_bmc(self.config.bmc, self.config.bmc_user, self.config.bmc_password)
+        bmc = self.config.create_bmc()
         h = host.HostWithBF2(self.config.node, bmc)
 
         iso = nfs.host_file(os.path.join(os.getcwd(), iso))
@@ -247,7 +246,7 @@ class BFClusterNode(ClusterNode):
         nfs = NFS(lh, self.external_port)
 
         logger.info(f"Preparing BF on host {self.config.node}")
-        bmc = BMC.from_bmc(self.config.bmc, self.config.bmc_user, self.config.bmc_password)
+        bmc = self.config.create_bmc()
         h = host.HostWithBF2(self.config.node, bmc)
         skip_boot = False
         if h.ping():
