@@ -10,6 +10,7 @@ from clustersConfig import BridgeConfig, ClustersConfig, HostConfig, NodeConfig
 from clusterNode import ClusterNode, X86ClusterNode, VmClusterNode, BFClusterNode
 from virtualBridge import VirBridge
 from virshPool import VirshPool
+from ktoolbox.common import unwrap
 
 
 class ClusterHost:
@@ -91,7 +92,7 @@ class ClusterHost:
         if not self.hosts_vms:
             return True
 
-        image_paths = {os.path.dirname(node.config.image_path) for node in nodes}
+        image_paths = {os.path.dirname(unwrap(node.config.image_path)) for node in nodes}
         for image_path in image_paths:
             self.hostconn.run(f"mkdir -p {image_path}")
             self.hostconn.run(f"chmod a+rw {image_path}")

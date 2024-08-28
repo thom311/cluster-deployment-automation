@@ -24,11 +24,14 @@ def get_filepath(*components: str) -> str:
 
 
 def _test_parse_1(tfile: TFileConfig) -> None:
+    rnd_seed = f"rnd_seed:{tfile}"
     yamlpath = get_filepath(tfile.filename)
+
     cc = clustersConfig.ClustersConfig(
         yamlpath,
         secrets_path="/secrets/path",
         test_only=True,
+        rnd_seed=rnd_seed,
     )
     assert isinstance(cc, clustersConfig.ClustersConfig)
 
@@ -53,6 +56,34 @@ def _test_parse_1(tfile: TFileConfig) -> None:
             default_network_api_port=default_network_api_port,
         )
         assert host == host2
+
+    for yamlidx2, node in enumerate(cc.masters):
+        vdict = node.serialize(show_secrets=True)
+        node2 = clustersConfig.NodeConfig.parse(
+            StructParseParseContext(
+                vdict,
+                yamlpath=f".clusters[0].masters[{yamlidx2}]",
+                yamlidx=yamlidx2,
+            ),
+            cluster_kind=cc.kind,
+            cluster_name=cc.name,
+            rnd_seed=rnd_seed,
+        )
+        assert node == node2
+
+    for yamlidx2, node in enumerate(cc.configured_workers):
+        vdict = node.serialize(show_secrets=True)
+        node2 = clustersConfig.NodeConfig.parse(
+            StructParseParseContext(
+                vdict,
+                yamlpath=f".clusters[0].workers[{yamlidx2}]",
+                yamlidx=yamlidx2,
+            ),
+            cluster_kind=cc.kind,
+            cluster_name=cc.name,
+            rnd_seed=rnd_seed,
+        )
+        assert node == node2
 
 
 def check_test5(tfile: TFileConfig, cc: clustersConfig.ClustersConfig) -> None:
@@ -97,6 +128,27 @@ def check_test5(tfile: TFileConfig, cc: clustersConfig.ClustersConfig) -> None:
             password=None,
             pre_installed=True,
         ),
+    )
+
+    assert cc.masters[0] == clustersConfig.NodeConfig(
+        yamlpath=".clusters[0].masters[0]",
+        yamlidx=0,
+        name="mycluster-master-1",
+        kind="vm",
+        node="localhost",
+        ip="192.168.122.41",
+        mac_explicit=None,
+        mac_random=cc.masters[0].mac_random,
+        image_path=cc.masters[0].image_path,
+        bmc=None,
+        bmc_user=None,
+        bmc_password=None,
+        host_side_bmc=None,
+        os_variant=cc.masters[0].os_variant,
+        preallocated=cc.masters[0].preallocated,
+        disk_size=cc.masters[0].disk_size,
+        ram=cc.masters[0].ram,
+        cpu=cc.masters[0].cpu,
     )
 
 
