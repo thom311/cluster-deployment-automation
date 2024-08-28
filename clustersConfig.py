@@ -1,11 +1,10 @@
-from os import path, getcwd
 import os
 import io
 import sys
 import re
 import functools
 import ipaddress
-from typing import Optional, Union
+from typing import Optional
 import xml.etree.ElementTree as et
 import jinja2
 from yaml import safe_load
@@ -15,7 +14,7 @@ from logger import logger
 import secrets
 import hashlib
 import common
-import collections.abc
+from collections.abc import Mapping
 import clusterInfo
 from dataclasses import dataclass
 from typing import Any
@@ -71,6 +70,14 @@ def random_mac(*, rnd_seed: Optional[str] = None) -> str:
 
 def is_openshift_like(cluster_kind: str) -> bool:
     return cluster_kind in ("openshift", "microshift")
+
+
+@kcommon.strict_dataclass
+@dataclass(frozen=True, kw_only=True)
+class ClusterConfigStructParseBase(kcommon.StructParseBaseNamed):
+    @property
+    def cluster_config(self) -> 'ClusterConfig':
+        return self._owner_reference.get(ClusterConfig)
 
 
 @dataclass
@@ -135,7 +142,7 @@ class ExtraConfigArgs:
 
 @kcommon.strict_dataclass
 @dataclass(frozen=True, kw_only=True)
-class NodeConfig(kcommon.StructParseBaseNamed):
+class NodeConfig(ClusterConfigStructParseBase):
     kind: str
     node: str
     ip: Optional[str]
@@ -360,7 +367,7 @@ class NodeConfig(kcommon.StructParseBaseNamed):
 
 @kcommon.strict_dataclass
 @dataclass(frozen=True, kw_only=True)
-class HostConfig(kcommon.StructParseBaseNamed):
+class HostConfig(ClusterConfigStructParseBase):
     # In YAML, if the value is set explicitly to "auto" or "", it
     # gets mapped to None here. It means to autodetect it.
     # See also _normalize_network_api_port().
@@ -450,30 +457,334 @@ class BridgeConfig:
     dynamic_ip_range: Optional[tuple[str, str]] = None
 
 
-class ClustersConfig:
-    name: str
-    kubeconfig: str
-    api_vip: dict[str, str]
-    ingress_vip: dict[str, str]
-    external_port: Optional[str]
+@kcommon.strict_dataclass
+@dataclass(frozen=True, kw_only=True)
+class ClusterConfig(kcommon.StructParseBaseNamed):
     kind: str
-    version: str
-    network_api_port: str
-    masters: list[NodeConfig]
-    workers: list[NodeConfig]
-    configured_workers: list[NodeConfig]
-    local_bridge_config: BridgeConfig
-    remote_bridge_config: BridgeConfig
-    full_ip_range: tuple[str, str]
-    ip_range: tuple[str, str]
-    hosts: tuple[HostConfig, ...]
+    kubeconfig: Optional[str]
+    version: Optional[str]
     proxy: Optional[str]
     noproxy: Optional[str]
+    api_vip: Optional[str]
+    ingress_vip: Optional[str]
+    network_api_port: Optional[str]
+    external_port: Optional[str]
+    ip_mask: Optional[str]
+    ip_range: Optional[tuple[str, str]]
+    install_iso: Optional[str]
+    ntp_source: Optional[str]
+    base_dns_domain: Optional[str]
+    masters: Mapping[str, NodeConfig]
+    workers: Mapping[str, NodeConfig]
+    hosts: Mapping[str, HostConfig]
+
+    def __post_init__(self) -> None:
+        for c in self.hosts.values():
+            c._owner_reference.init(self)
+        for n in self.masters.values():
+            n._owner_reference.init(self)
+        for n in self.workers.values():
+            n._owner_reference.init(self)
+
+    def serialize(self, *, show_secrets: bool = False) -> dict[str, Any]:
+        extra_1: dict[str, Any] = {}
+        kcommon.dict_add_optional(extra_1, "kubeconfig", self.kubeconfig)
+        kcommon.dict_add_optional(extra_1, "version", self.version)
+        kcommon.dict_add_optional(extra_1, "proxy", self.proxy)
+        kcommon.dict_add_optional(extra_1, "noproxy", self.noproxy)
+        kcommon.dict_add_optional(extra_1, "api_vip", self.api_vip)
+        kcommon.dict_add_optional(extra_1, "ingress_vip", self.ingress_vip)
+        kcommon.dict_add_optional(extra_1, "network_api_port", self.network_api_port or "auto")
+        kcommon.dict_add_optional(extra_1, "external_port", self.external_port or "auto")
+        kcommon.dict_add_optional(extra_1, "ip_mask", self.ip_mask)
+        kcommon.dict_add_optional(extra_1, "ip_range", "-".join(self.ip_range) if self.ip_range else None)
+        kcommon.dict_add_optional(extra_1, "install_iso", self.install_iso)
+        kcommon.dict_add_optional(extra_1, "ntp_source", self.ntp_source)
+        kcommon.dict_add_optional(extra_1, "base_dns_domain", self.base_dns_domain)
+        return {
+            **super().serialize(),
+            "kind": self.kind,
+            **extra_1,
+            "masters": [n.serialize(show_secrets=show_secrets) for n in self.masters.values()],
+            "workers": [n.serialize(show_secrets=show_secrets) for n in self.workers.values()],
+            "hosts": [h.serialize(show_secrets=show_secrets) for h in self.hosts.values()],
+        }
+
+    @staticmethod
+    def parse(
+        pctx: StructParseParseContext,
+        *,
+        basedir: Optional[str] = None,
+        rnd_seed: Optional[str] = None,
+    ) -> "ClusterConfig":
+        if basedir is None:
+            basedir = os.getcwd()
+
+        with pctx.with_strdict() as varg:
+
+            name = kcommon.structparse_pop_str_name(varg.for_name())
+
+            kind = kcommon.structparse_pop_str(
+                varg.for_key("kind"),
+                default="openshift",
+            )
+            valid_kinds = ("openshift", "microshift", "iso")
+            if kind not in valid_kinds:
+                raise pctx.value_error(f"invalid value {repr(kind)} (must be one of {repr(list(valid_kinds))})", key="kind")
+
+            ntp_source = kcommon.structparse_pop_str(
+                varg.for_key("ntp_source"),
+                default="clock.redhat.com" if is_openshift_like(kind) else None,
+            )
+
+            base_dns_domain = kcommon.structparse_pop_str(
+                varg.for_key("base_dns_domain"),
+                default="redhat.com" if is_openshift_like(kind) else None,
+            )
+
+            version = kcommon.structparse_pop_str(
+                varg.for_key("version"),
+                default="4.14.0-nightly" if is_openshift_like(kind) else None,
+            )
+
+            network_api_port: Optional[str] = kcommon.structparse_pop_str(
+                varg.for_key("network_api_port"),
+                default="auto",
+            )
+            network_api_port = _normalize_network_api_port(network_api_port)
+
+            external_port: Optional[str] = kcommon.structparse_pop_str(
+                varg.for_key("external_port"),
+                default="auto",
+            )
+            external_port = _normalize_network_api_port(external_port)
+
+            api_vip = kcommon.structparse_pop_str(
+                varg.for_key("api_vip"),
+                default=None,
+            )
+            if api_vip is not None:
+                try:
+                    api_vip, _ = knetdev.validate_ipaddr(api_vip, addr_family="4")
+                except Exception:
+                    raise pctx.value_error(f"{repr(api_vip)} is not a valid IPv4 address", key="api_vip")
+
+            ingress_vip = kcommon.structparse_pop_str(
+                varg.for_key("ingress_vip"),
+                default=None,
+            )
+            if ingress_vip is not None:
+                try:
+                    ingress_vip, _ = knetdev.validate_ipaddr(ingress_vip, addr_family="4")
+                except Exception:
+                    raise pctx.value_error(f"{repr(ingress_vip)} is not a valid IPv4 address", key="ingress_vip")
+
+            kubeconfig = kcommon.structparse_pop_str(
+                varg.for_key("kubeconfig"),
+                default=os.path.join(basedir, f"kubeconfig.{name}") if is_openshift_like(kind) else None,
+            )
+
+            proxy = kcommon.structparse_pop_str(
+                varg.for_key("proxy"),
+                default=None,
+            )
+
+            noproxy = kcommon.structparse_pop_str(
+                varg.for_key("noproxy"),
+                default=None,
+            )
+
+            install_iso = kcommon.structparse_pop_str(
+                varg.for_key("install_iso"),
+                default=None,
+            )
+
+            ip_mask = kcommon.structparse_pop_str(
+                varg.for_key("ip_mask"),
+                default="255.255.0.0" if is_openshift_like(kind) else None,
+            )
+            if ip_mask is not None:
+                try:
+                    ip_mask, _ = knetdev.validate_ipaddr(ip_mask, addr_family='4')
+                except Exception:
+                    raise pctx.value_error(f"invalid subnet mask {repr(ip_mask)} is not an IPv4 address", key="ip_mask")
+                # TODO: normalize/validate that this is a subnet mask.
+
+            ip_range: Optional[tuple[str, str]] = None
+            ip_range_str = kcommon.structparse_pop_str(
+                varg.for_key("ip_range"),
+                default="192.168.122.1-192.168.122.254" if is_openshift_like(kind) else None,
+            )
+            if ip_range_str is not None:
+                try:
+                    a, b = ip_range_str.split("-")
+                    a, _ = knetdev.validate_ipaddr(a, addr_family='4')
+                    b, _ = knetdev.validate_ipaddr(b, addr_family='4')
+                except Exception:
+                    raise pctx.value_error(f"invalid IPv4 address range {repr(ip_mask)} not in the form \"<startIP>-<endIP>\"", key="ip_range") from None
+                ip_range = a, b
+                # TODO: validate that the range is non-empty and within the ip_mask subnet.
+
+            def _construct_node(pctx2: StructParseParseContext) -> NodeConfig:
+                return NodeConfig.parse(
+                    pctx2,
+                    cluster_kind=kind,
+                    cluster_name=name,
+                    rnd_seed=rnd_seed,
+                )
+
+            masters = kcommon.structparse_pop_objlist_to_dict(
+                varg.for_key("masters"),
+                construct=_construct_node,
+            )
+
+            workers = kcommon.structparse_pop_objlist_to_dict(
+                varg.for_key("workers"),
+                construct=_construct_node,
+            )
+
+            hosts = ClusterConfig._parse_hosts(
+                varg,
+                masters=masters,
+                workers=workers,
+                default_network_api_port=network_api_port,
+            )
+
+            # TODO: postconfig and preconfig is not handled by ClusterConfig at the moment.
+            # It's still handled by ClustersConfig. Just pop the entries from here.
+            varg.vdict.pop("preconfig", None)
+            varg.vdict.pop("postconfig", None)
+
+        if is_openshift_like(kind):
+            assert kubeconfig
+            assert version
+            assert ip_range
+            assert ip_mask
+            if not ClusterConfig._is_sno(kind, len(masters)):
+                if api_vip is None:
+                    raise pctx.value_error(f"missing parameter for cluster kind {kind}", key="api_vip")
+                if ingress_vip is None:
+                    raise pctx.value_error(f"missing parameter for cluster kind {kind}", key="ingress_vip")
+            else:
+                # Silently unset values.
+                api_vip = None
+                ingress_vip = None
+        else:
+            if version is not None:
+                raise pctx.value_error(f"value not allowed with kind {kind}", key="version")
+            if kubeconfig is not None:
+                raise pctx.value_error(f"value not allowed with kind {kind}", key="kubeconfig")
+            if api_vip is not None:
+                raise pctx.value_error(f"value not allowed with kind {kind}", key="api_vip")
+            if ingress_vip is not None:
+                raise pctx.value_error(f"value not allowed with kind {kind}", key="ingress_vip")
+            if proxy is not None:
+                raise pctx.value_error(f"value not allowed with kind {kind}", key="proxy")
+            if noproxy is not None:
+                raise pctx.value_error(f"value not allowed with kind {kind}", key="noproxy")
+            if ip_mask is not None:
+                raise pctx.value_error(f"value not allowed with kind {kind}", key="ip_mask")
+            if ip_range is not None:
+                raise pctx.value_error(f"value not allowed with kind {kind}", key="ip_range")
+            if ntp_source is not None:
+                raise pctx.value_error(f"value not allowed with kind {kind}", key="ntp_source")
+            if base_dns_domain is not None:
+                raise pctx.value_error(f"value not allowed with kind {kind}", key="base_dns_domain")
+
+        if kind == "iso":
+            if install_iso is None:
+                raise pctx.value_error(f"mandatory parameter missing for kind {kind}", key="install_iso")
+            if workers:
+                raise pctx.value_error(f"no workers allowed with kind {repr(kind)}", key="workers")
+            if len(masters) != 1:
+                if not masters:
+                    raise pctx.value_error(f"requires one master with kind {repr(kind)}", key="masters")
+                raise pctx.value_error(f"only one master allowed with kind {repr(kind)}", key="masters")
+
+            master = next(iter(masters.values()))
+            if master.kind not in ("physical", "marvell-dpu"):
+                raise pctx.value_error(f"for a cluster kind {repr(kind)} the master has an unexpected kind {master.kind}", subpath=".master[0]")
+        else:
+            if install_iso is not None:
+                raise pctx.value_error("only valid with kind \"iso\"", key="install_iso")
+
+        return ClusterConfig(
+            yamlidx=pctx.yamlidx,
+            yamlpath=pctx.yamlpath,
+            name=name,
+            kind=kind,
+            kubeconfig=kubeconfig,
+            version=version,
+            ntp_source=ntp_source,
+            base_dns_domain=base_dns_domain,
+            proxy=proxy,
+            noproxy=noproxy,
+            install_iso=install_iso,
+            api_vip=api_vip,
+            ingress_vip=ingress_vip,
+            ip_mask=ip_mask,
+            ip_range=ip_range,
+            network_api_port=network_api_port,
+            external_port=external_port,
+            masters=masters,
+            workers=workers,
+            hosts=hosts,
+        )
+
+    @staticmethod
+    def _parse_hosts(
+        varg: kcommon.StructParseVarg,
+        *,
+        masters: dict[str, NodeConfig],
+        workers: dict[str, NodeConfig],
+        default_network_api_port: Optional[str],
+    ) -> dict[str, HostConfig]:
+        hosts = kcommon.structparse_pop_objlist_to_dict(
+            varg.for_key("hosts"),
+            construct=lambda pctx2: HostConfig.parse(
+                pctx2,
+                default_network_api_port=default_network_api_port,
+            ),
+        )
+
+        # artificially create entires that are missing.
+        node_names2: set[str] = set()
+        node_names2.update(n.node for n in masters.values())
+        node_names2.update(n.node for n in workers.values())
+        node_names2.discard("localhost")
+        node_names3 = ["localhost"] + sorted(node_names2)
+        node_names3 = [n for n in node_names3 if n not in hosts]
+        for node_name in node_names3:
+            yamlidx2 = len(hosts)
+            pctx2 = StructParseParseContext(
+                {"name": node_name},
+                yamlpath=f"{varg.yamlpath}.hosts[{yamlidx2}]",
+                yamlidx=yamlidx2,
+            )
+            hosts[node_name] = HostConfig.parse(
+                pctx2,
+                default_network_api_port=default_network_api_port,
+            )
+
+        return hosts
+
+    @staticmethod
+    def _is_sno(kind: str, n_masters: int) -> bool:
+        return n_masters == 1 and kind == "openshift"
+
+    @property
+    def is_sno(self) -> bool:
+        return self._is_sno(self.kind, len(self.masters))
+
+
+class ClustersConfig:
+    worker_range: common.RangeList
+    external_port: str
+    local_bridge_config: BridgeConfig
+    remote_bridge_config: BridgeConfig
+    ip_range: tuple[str, str]
     preconfig: list[ExtraConfigArgs]
     postconfig: list[ExtraConfigArgs]
-    ntp_source: str
-    base_dns_domain: str
-    install_iso: str
     secrets_path: str
 
     def __init__(
@@ -485,97 +796,28 @@ class ClustersConfig:
         rnd_seed: Optional[str] = None,
         test_only: bool = False,
     ):
-        self.external_port = None
-        self.kind = "openshift"
-        self.version = "4.14.0-nightly"
-        self.network_api_port = "auto"
-        self.masters: list[NodeConfig] = []
-        self.workers: list[NodeConfig] = []
-        self.configured_workers: list[NodeConfig] = []
-        self.proxy: Optional[str] = None
-        self.noproxy: Optional[str] = None
-        self.preconfig: list[ExtraConfigArgs] = []
-        self.postconfig: list[ExtraConfigArgs] = []
-        self.ntp_source = "clock.redhat.com"
-        self.base_dns_domain = "redhat.com"
-        self.install_iso = ""
-
         self.secrets_path = secrets_path
+        self.worker_range = worker_range
 
         cc = self._load_full_config(yaml_path)
-        self._check_deprecated_config(cc)
 
-        yamlpath = ".clusters[0]"
-
-        self.set_cc_defaults(cc)
-        if "proxy" in cc:
-            self.proxy = cc["proxy"]
-        if "noproxy" in cc:
-            self.noproxy = cc["noproxy"]
-        if "external_port" in cc:
-            self.external_port = cc["external_port"]
-        if "version" in cc:
-            self.version = cc["version"]
-        if "kind" in cc:
-            self.kind = cc["kind"]
-            if self.kind == "iso":
-                self.install_iso = cc["install_iso"]
-        if "network_api_port" in cc:
-            self.network_api_port = cc["network_api_port"]
-        self.name = cc["name"]
-        if "ntp_source" in cc:
-            self.ntp_source = cc["ntp_source"]
-        if "base_dns_domain" in cc:
-            self.base_dns_domain = cc["base_dns_domain"]
-
-        self.kubeconfig = path.join(getcwd(), f'kubeconfig.{cc["name"]}')
-        if "kubeconfig" in cc:
-            self.kubeconfig = cc["kubeconfig"]
-
-        for yamlidx2, n in enumerate(cc["masters"]):
-            self.masters.append(
-                NodeConfig.parse(
-                    StructParseParseContext(
-                        n,
-                        yamlpath=f"{yamlpath}.masters[{yamlidx2}]",
-                        yamlidx=yamlidx2,
-                    ),
-                    cluster_kind=self.kind,
-                    cluster_name=self.name,
-                    rnd_seed=rnd_seed,
-                )
-            )
-        for yamlidx2, n in enumerate(cc["workers"]):
-            self.configured_workers.append(
-                NodeConfig.parse(
-                    StructParseParseContext(
-                        n,
-                        yamlpath=f"{yamlpath}.workers[{yamlidx2}]",
-                        yamlidx=yamlidx2,
-                    ),
-                    cluster_kind=self.kind,
-                    cluster_name=self.name,
-                    rnd_seed=rnd_seed,
-                )
-            )
-
-        self.workers = worker_range.filter(self.configured_workers)
-
-        self.hosts = self.parse_hosts(
-            yamlpath,
-            cc,
-            node_names=(n.node for n in self.all_nodes()),
-            default_network_api_port=self.network_api_port,
+        self.cluster_config = ClusterConfig.parse(
+            StructParseParseContext(
+                cc,
+                yamlpath=".clusters[0]",
+                yamlidx=0,
+            ),
+            rnd_seed=rnd_seed,
         )
 
-        if not self.is_sno():
-            self.api_vip = {'ip': cc["api_vip"]}
-            self.ingress_vip = {'ip': cc["ingress_vip"]}
+        self.external_port = self.cluster_config.external_port or "auto"
 
         base_path = os.path.dirname(yaml_path)
-        for c in cc["preconfig"]:
+        self.preconfig: list[ExtraConfigArgs] = []
+        self.postconfig: list[ExtraConfigArgs] = []
+        for c in cc.get("preconfig", ()):
             self.preconfig.append(ExtraConfigArgs(base_path, **c))
-        for c in cc["postconfig"]:
+        for c in cc.get("postconfig", ()):
             self.postconfig.append(ExtraConfigArgs(base_path, **c))
 
         if test_only:
@@ -586,23 +828,20 @@ class ClustersConfig:
             # that are needed.
             return
 
-        if self.kind == "openshift":
-            self.configure_ip_range(cc)
+        if self.cluster_config.kind == "openshift":
+            self.configure_ip_range(self.cluster_config)
 
         for c in self.preconfig:
             c.pre_check()
         for c in self.postconfig:
             c.pre_check()
 
-    def configure_ip_range(self, cc: dict[str, Any]) -> None:
+    def configure_ip_range(self, cluster_config: ClusterConfig) -> None:
         # Reserve IPs for AI, masters and workers.
-        ip_mask = cc["ip_mask"]
-        ip_range = cc["ip_range"].split("-")
-        if len(ip_range) != 2:
-            logger.error_and_exit(f"Invalid ip_range config {cc['ip_range']};  it must be of the form '<startIP>-<endIP>.")
+        ip_mask = unwrap(cluster_config.ip_mask)
+        ip_range = unwrap(cluster_config.ip_range)
 
-        self.full_ip_range = (ip_range[0], ip_range[1])
-        n_nodes = len(cc["masters"]) + len(cc["workers"]) + 1
+        n_nodes = len(cluster_config.masters) + len(cluster_config.workers) + 1
 
         # Get the last IP used in the running cluster.
         last_ip = self.get_last_ip()
@@ -624,6 +863,52 @@ class ClustersConfig:
         self.local_bridge_config = BridgeConfig(ip=self.ip_range[0], mask=ip_mask, dynamic_ip_range=dynamic_ip_range)
         self.remote_bridge_config = BridgeConfig(ip=ip_range[1], mask=ip_mask)
 
+    @property
+    def name(self) -> str:
+        return self.cluster_config.name
+
+    @property
+    def kind(self) -> str:
+        return self.cluster_config.kind
+
+    @property
+    def version(self) -> str:
+        if self.cluster_config.version is None:
+            raise ValueError(f"\"{self.cluster_config.yamlpath}.version\": parameter missing for cluster kind {repr(self.kind)}")
+        return self.cluster_config.version
+
+    @property
+    def network_api_port(self) -> str:
+        if self.cluster_config.network_api_port is None:
+            # TODO: the upper layers should accept "auto" to be represented as
+            # None.
+            return "auto"
+        return self.cluster_config.network_api_port
+
+    @property
+    def kubeconfig(self) -> str:
+        if self.cluster_config.kubeconfig is None:
+            raise ValueError(f"\"{self.cluster_config.yamlpath}.kubeconfig\": parameter missing for cluster kind {repr(self.kind)}")
+        return self.cluster_config.kubeconfig
+
+    @property
+    def full_ip_range(self) -> tuple[str, str]:
+        if self.cluster_config.ip_range is None:
+            raise ValueError(f"IP range parameter missing for cluster kind {repr(self.kind)}")
+        return self.cluster_config.ip_range
+
+    @property
+    def masters(self) -> list[NodeConfig]:
+        return list(self.cluster_config.masters.values())
+
+    @property
+    def workers(self) -> list[NodeConfig]:
+        return self.worker_range.filter(self.cluster_config.workers.values())
+
+    @property
+    def hosts(self) -> Mapping[str, HostConfig]:
+        return self.cluster_config.hosts
+
     def get_last_ip(self) -> str | None:
         hostconn = host.LocalHost()
         last_ip = "0.0.0.0"
@@ -638,73 +923,9 @@ class ClustersConfig:
             return last_ip
         return None
 
-    def set_cc_defaults(self, cc: dict[str, Union[None, str, list[dict[str, str]]]]) -> None:
-        # Some config may be left out from the yaml. Try to provide defaults.
-        if "masters" not in cc:
-            cc["masters"] = []
-        if "workers" not in cc:
-            cc["workers"] = []
-        if "kubeconfig" not in cc:
-            cc["kubeconfig"] = path.join(getcwd(), f'kubeconfig.{cc["name"]}')
-        if "preconfig" not in cc:
-            cc["preconfig"] = []
-        if "postconfig" not in cc:
-            cc["postconfig"] = []
-        if "proxy" not in cc:
-            cc["proxy"] = None
-        if "ip_range" not in cc:
-            cc["ip_range"] = "192.168.122.1-192.168.122.254"
-        if "ip_mask" not in cc:
-            cc["ip_mask"] = "255.255.0.0"
-
-    @staticmethod
-    def parse_hosts(
-        yamlpath: str,
-        cc: dict[str, Any],
-        *,
-        node_names: collections.abc.Iterable[str],
-        default_network_api_port: Optional[str],
-    ) -> tuple[HostConfig, ...]:
-        hosts_lst: list[HostConfig] = []
-        lst1 = cc.get("hosts", None)
-        if lst1 is None:
-            lst1 = []
-        elif not isinstance(lst1, list):
-            raise ValueError(f"\"{yamlpath}.hosts\": this must be a list but is {type(lst1)}")
-        for pctx2 in StructParseParseContext.enumerate_list(f"{yamlpath}.hosts", lst1):
-            host = HostConfig.parse(
-                pctx2,
-                default_network_api_port=default_network_api_port,
-            )
-            for h in hosts_lst:
-                if h.name == host.name:
-                    raise pctx2.value_error(f"dupliate name {repr(host.name)} with '{h.yamlpath}.name'.", key="name")
-            hosts_lst.append(host)
-
-        # artificially create entires that are missing.
-        node_names2 = set(node_names)
-        node_names2.discard("localhost")
-        name_list = ["localhost"] + sorted(node_names2)
-        name_list = [n for n in name_list if not any(h.name == n for h in hosts_lst)]
-        for node_name in name_list:
-            yamlidx2 = len(hosts_lst)
-            pctx2 = StructParseParseContext(
-                {"name": node_name},
-                yamlpath=f"{yamlpath}.hosts[{yamlidx2}]",
-                yamlidx=yamlidx2,
-            )
-            hosts_lst.append(
-                HostConfig.parse(
-                    pctx2,
-                    default_network_api_port=default_network_api_port,
-                )
-            )
-
-        return tuple(hosts_lst)
-
     @staticmethod
     def _load_full_config(yaml_path: str) -> dict[str, Any]:
-        if not path.exists(yaml_path):
+        if not os.path.exists(yaml_path):
             logger.error(f"could not find config in path: '{yaml_path}'")
             sys.exit(1)
 
@@ -719,21 +940,6 @@ class ClustersConfig:
         if not isinstance(cc, dict) or not all(isinstance(k, str) for k in cc):
             raise RuntimeError(f"YAML {yaml_path} does not contain a usable dictionary")
         return cc
-
-    def _check_deprecated_config(self, cc: dict[str, Any]) -> None:
-        deprecated_configs: dict[str, Optional[str]] = {"api_ip": "api_vip", "ingress_ip": "ingress_vip"}
-
-        deprecated = deprecated_configs.keys() & cc.keys()
-
-        for key in deprecated:
-            value = deprecated_configs[key]
-            err = f"Deprecated config \"{key}\" found"
-            if value is not None:
-                err += f", please use \"{value}\" instead"
-            logger.error(err)
-
-        if len(deprecated):
-            sys.exit(-1)
 
     def get_external_port(self) -> str:
         def autodetect_external_port() -> str:
@@ -756,7 +962,7 @@ class ClustersConfig:
                 return False
             return True
 
-        if not all(validate_node_ip(n) for n in self.masters + self.configured_workers):
+        if not all(validate_node_ip(n) for n in self.masters + list(self.cluster_config.workers.values())):
             logger.error(f"Not all master/worker IPs are in the reserved cluster IP range ({self.ip_range}).  Other hosts in the network might be offered those IPs via DHCP.")
 
     def validate_external_port(self) -> bool:
@@ -840,9 +1046,6 @@ class ClustersConfig:
 
     def local_worker_vms(self) -> list[NodeConfig]:
         return [x for x in self.worker_vms() if x.node == "localhost"]
-
-    def is_sno(self) -> bool:
-        return len(self.masters) == 1 and self.kind == "openshift"
 
 
 def main() -> None:

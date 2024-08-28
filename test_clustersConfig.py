@@ -35,13 +35,23 @@ def _test_parse_1(tfile: TFileConfig) -> None:
     )
     assert isinstance(cc, clustersConfig.ClustersConfig)
 
-    assert isinstance(cc.hosts, tuple)
-    assert all(isinstance(host, clustersConfig.HostConfig) for host in cc.hosts)
+    assert isinstance(cc.hosts, dict)
+    assert all(isinstance(host, clustersConfig.HostConfig) and host.name == name for name, host in cc.hosts.items())
 
     if tfile.check is not None:
         tfile.check(tfile, cc)
 
-    for yamlidx2, host in enumerate(cc.hosts):
+    vdict = cc.cluster_config.serialize(show_secrets=True)
+    cluster_config2 = clustersConfig.ClusterConfig.parse(
+        StructParseParseContext(
+            vdict,
+            yamlpath=".clusters[0]",
+            yamlidx=0,
+        )
+    )
+    assert cc.cluster_config == cluster_config2
+
+    for yamlidx2, host in enumerate(cc.hosts.values()):
         vdict = host.serialize(show_secrets=True)
         if host.network_api_port_is_default:
             default_network_api_port = host.network_api_port
@@ -71,7 +81,7 @@ def _test_parse_1(tfile: TFileConfig) -> None:
         )
         assert node == node2
 
-    for yamlidx2, node in enumerate(cc.configured_workers):
+    for yamlidx2, node in enumerate(cc.cluster_config.workers.values()):
         vdict = node.serialize(show_secrets=True)
         node2 = clustersConfig.NodeConfig.parse(
             StructParseParseContext(
@@ -87,7 +97,7 @@ def _test_parse_1(tfile: TFileConfig) -> None:
 
 
 def check_test5(tfile: TFileConfig, cc: clustersConfig.ClustersConfig) -> None:
-    assert cc.hosts == (
+    assert tuple(cc.hosts.values()) == (
         clustersConfig.HostConfig(
             yamlpath=".clusters[0].hosts[0]",
             yamlidx=0,
