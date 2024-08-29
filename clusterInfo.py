@@ -1,9 +1,11 @@
 import argparse
 import dataclasses
+import functools
 import re
 import os
 import gspread
 import tenacity
+import threading
 import typing
 from typing import Optional
 from collections.abc import Iterable
@@ -252,6 +254,87 @@ def load_cluster_info(
         validate_cluster_info(cluster_info)
 
     return cluster_info
+
+
+class ClusterInfoLoader:
+    def __init__(
+        self,
+        *,
+        all_cluster_info: Optional[dict[str, ClusterInfo]] = None,
+        current_host: Optional[str] = None,
+        delegate_loader: Optional['ClusterInfoLoader'] = None,
+    ) -> None:
+        self._lock = threading.Lock()
+        self._current_host = current_host
+        self._delegate_loader = delegate_loader
+        self._all_cluster_info = all_cluster_info
+        self._is_loaded = False
+
+    def get_all(self) -> dict[str, ClusterInfo]:
+        if self._delegate_loader is not None:
+            all_cluster_info = self._delegate_loader.get_all()
+            with self._lock:
+                self._is_loaded = True
+            return all_cluster_info
+        with self._lock:
+            if self._all_cluster_info is None:
+                self._all_cluster_info = load_all_cluster_info()
+                logger.debug(f"all-cluster-info: {repr(self._all_cluster_info)}")
+            self._is_loaded = True
+            return self._all_cluster_info
+
+    @property
+    def is_loaded(self) -> bool:
+        # A major point of ClusterInfoLoader is loading the data lazily on
+        # first use. This property tells us whether we did load it.
+        with self._lock:
+            return self._is_loaded
+
+    @property
+    def current_host(self) -> str:
+        with self._lock:
+            if self._current_host is None:
+                self._current_host = common.current_host()
+            return self._current_host
+
+    @functools.cache
+    def get(self) -> ClusterInfo:
+        return load_cluster_info(
+            match_hostname=self.current_host,
+            cluster_infos=self.get_all(),
+            required=True,
+        )
+
+    def eval_worker_number(self, a: int) -> str:
+        name = self.get().workers[a]
+        lab_match = re.search(r"lab(\d+)", name)
+        if lab_match:
+            return lab_match.group(1)
+        return re.sub("[^0-9]", "", name)
+
+    def eval_worker_name(self, a: int) -> str:
+        return self.get().workers[a]
+
+    def eval_bmc(self, a: int) -> str:
+        return self.get().bmcs[a]
+
+    def eval_api_network(self) -> str:
+        return self.get().network_api_port
+
+    def eval_iso_server(self) -> str:
+        return self.get().iso_server
+
+    def eval_activation_key(self) -> str:
+        return self.get().activation_key
+
+    def eval_organization_id(self) -> str:
+        return self.get().organization_id
+
+    def eval_imc_hostname(self, a: int) -> str:
+        return self.get().bmc_imc_hostnames[a]
+
+    def eval_ipu_mac_address(self, a: int) -> str:
+        return self.get().ipu_mac_addresses[a]
 
 
 def _print_json(data: typing.Any) -> None:

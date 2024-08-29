@@ -16,7 +16,6 @@ import hashlib
 import common
 import clusterInfo
 import collections.abc
-from clusterInfo import ClusterInfo
 from dataclasses import dataclass
 from typing import Any
 import ktoolbox.common as kcommon
@@ -500,7 +499,6 @@ class ClustersConfig:
         self.base_dns_domain = "redhat.com"
         self.install_iso = ""
 
-        self._cluster_info: Optional[ClusterInfo] = None
         self._load_full_config(yaml_path)
         self._check_deprecated_config()
 
@@ -761,79 +759,28 @@ class ClustersConfig:
     def validate_external_port(self) -> bool:
         return bool(common.ip_links(host.LocalHost(), ifname=self.get_external_port()))
 
-    def _apply_jinja(self, contents: str, cluster_name: str) -> str:
-        def worker_number(a: int) -> str:
-            self._ensure_clusters_loaded()
-            assert self._cluster_info is not None
-            name = self._cluster_info.workers[a]
-            lab_match = re.search(r"lab(\d+)", name)
-            if lab_match:
-                return lab_match.group(1)
-            else:
-                return re.sub("[^0-9]", "", name)
+    @staticmethod
+    def _apply_jinja(contents: str, cluster_name: str) -> str:
+        ci = clusterInfo.ClusterInfoLoader()
 
-        def worker_name(a: int) -> str:
-            self._ensure_clusters_loaded()
-            assert self._cluster_info is not None
-            return self._cluster_info.workers[a]
+        template = jinja2.Template(contents)
 
-        def bmc(a: int) -> str:
-            self._ensure_clusters_loaded()
-            assert self._cluster_info is not None
-            return self._cluster_info.bmcs[a]
-
-        def api_network() -> str:
-            self._ensure_clusters_loaded()
-            assert self._cluster_info is not None
-            return self._cluster_info.network_api_port
-
-        def iso_server() -> str:
-            self._ensure_clusters_loaded()
-            assert self._cluster_info is not None
-            return self._cluster_info.iso_server
-
-        def activation_key() -> str:
-            self._ensure_clusters_loaded()
-            assert self._cluster_info is not None
-            return self._cluster_info.activation_key
-
-        def organization_id() -> str:
-            self._ensure_clusters_loaded()
-            assert self._cluster_info is not None
-            return self._cluster_info.organization_id
-
-        def imc_hostname(a: int) -> str:
-            self._ensure_clusters_loaded()
-            assert self._cluster_info is not None
-            return self._cluster_info.bmc_imc_hostnames[a]
-
-        def ipu_mac_address(a: int) -> str:
-            self._ensure_clusters_loaded()
-            assert self._cluster_info is not None
-            return self._cluster_info.ipu_mac_addresses[a]
-
-        format_string = contents
-
-        template = jinja2.Template(format_string)
-        template.globals['worker_number'] = worker_number
-        template.globals['worker_name'] = worker_name
-        template.globals['api_network'] = api_network
-        template.globals['iso_server'] = iso_server
-        template.globals['bmc'] = bmc
-        template.globals['activation_key'] = activation_key
-        template.globals['organization_id'] = organization_id
-        template.globals['IMC_hostname'] = imc_hostname
-        template.globals['IPU_mac_address'] = ipu_mac_address
+        template.globals['worker_number'] = ci.eval_worker_number
+        template.globals['worker_name'] = ci.eval_worker_name
+        template.globals['api_network'] = ci.eval_api_network
+        template.globals['iso_server'] = ci.eval_iso_server
+        template.globals['bmc'] = ci.eval_bmc
+        template.globals['activation_key'] = ci.eval_activation_key
+        template.globals['organization_id'] = ci.eval_organization_id
+        template.globals['IMC_hostname'] = ci.eval_imc_hostname
+        template.globals['IPU_mac_address'] = ci.eval_ipu_mac_address
 
         kwargs = {}
         kwargs["cluster_name"] = cluster_name
 
-        t: str = template.render(**kwargs)
-        return t
+        result: str = template.render(**kwargs)
 
-    def _ensure_clusters_loaded(self) -> None:
-        if self._cluster_info is None:
-            self._cluster_info = clusterInfo.load_cluster_info()
+        return result
 
     def all_nodes(self) -> list[NodeConfig]:
         return self.masters + self.workers
