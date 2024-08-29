@@ -1,6 +1,8 @@
 import sys
 import os
 import gspread
+import typing
+import threading
 from oauth2client.service_account import ServiceAccountCredentials
 from logger import logger
 
@@ -90,3 +92,34 @@ def load_cluster_info(provision_host: str) -> ClusterInfo:
     for ci in all_cluster_info.values():
         validate_cluster_info(ci)
     return all_cluster_info[provision_host]
+
+
+class ClusterInfoLoader:
+    def __init__(self, all_cluster_info: typing.Optional[dict[str, ClusterInfo]] = None) -> None:
+        self._lock = threading.Lock()
+        self._all_cluster_info = all_cluster_info
+
+    def get_all(self) -> dict[str, ClusterInfo]:
+        with self._lock:
+            if self._all_cluster_info is None:
+                self._all_cluster_info = load_all_cluster_info()
+            return self._all_cluster_info
+
+    def get(self, hostname: str, *, try_hostname: bool = True) -> typing.Optional[ClusterInfo]:
+        all_cluster_info = self.get_all()
+        if hostname in all_cluster_info:
+            return all_cluster_info[hostname]
+        if try_hostname:
+            # Also try without the FQDN.
+            if "." in hostname:
+                h2 = hostname.split(".")[0]
+                if h2 in all_cluster_info:
+                    return all_cluster_info[h2]
+        return None
+
+    def get_or_die(self, hostname: str, *, try_hostname: bool = True) -> ClusterInfo:
+        ci = self.get(hostname, try_hostname=try_hostname)
+        if ci is not None:
+            return ci
+        logger.debug(f"all-cluster-info: {repr(self.get_all())}")
+        logger.error_and_exit(f"Cannot find cluster info for host {repr(hostname)}")
