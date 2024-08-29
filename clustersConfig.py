@@ -14,6 +14,7 @@ import common
 import clusterInfo
 from clusterInfo import ClusterInfo
 from dataclasses import dataclass, field
+import ktoolbox.common as kcommon
 
 
 @dataclass
@@ -139,7 +140,8 @@ class HostConfig:
         return self.pre_installed == "true"
 
 
-@dataclass
+@kcommon.strict_dataclass
+@dataclass(frozen=True, kw_only=True)
 class BridgeConfig:
     ip: str
     mask: str
