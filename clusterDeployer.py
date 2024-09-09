@@ -49,8 +49,8 @@ class ClusterDeployer(BaseDeployer):
         self._ai = ai
         self._secrets_path = secrets_path
 
-        self._local_host = ClusterHost(host.LocalHost(), self._cc.hosts["localhost"], cc, cc.local_bridge_config)
-        self._remote_hosts = {bm.name: ClusterHost(host.RemoteHost(bm.name), bm, cc, cc.remote_bridge_config) for bm in self._cc.hosts.values() if bm.name != "localhost"}
+        self._local_host = ClusterHost(host.LocalHost(), self._cc.hosts["localhost"], cc, unwrap(cc.cluster_config.local_bridge_config))
+        self._remote_hosts = {bm.name: ClusterHost(host.RemoteHost(bm.name), bm, cc, unwrap(cc.cluster_config.remote_bridge_config)) for bm in self._cc.hosts.values() if bm.name != "localhost"}
         self._all_hosts = [self._local_host] + list(self._remote_hosts.values())
         self._all_nodes = {k8s_node.config.name: k8s_node for h in self._all_hosts for k8s_node in h._k8s_nodes()}
 
@@ -478,7 +478,7 @@ class ClusterDeployer(BaseDeployer):
         if not node.start(image):
             return False
 
-        if not node.wait_for_boot(self._cc.full_ip_range):
+        if not node.wait_for_boot(self._cc.real_ip_range):
             return False
 
         if not master and not self._rename_worker(node):
@@ -491,7 +491,7 @@ class ClusterDeployer(BaseDeployer):
         rh = host.RemoteHost(node.ip())
         rh.ssh_connect("core")
 
-        ip_range = self._cc.full_ip_range
+        ip_range = self._cc.real_ip_range
         logger.info(f"Connectivity established to worker {node.config.name} checking that it has an IP in range: {ip_range}")
 
         def any_address_in_range(h: host.Host, ip_range: tuple[str, str]) -> bool:
@@ -598,7 +598,7 @@ class ClusterDeployer(BaseDeployer):
 
         if len(self.bf_connections) != len(bf_workers):
             for e in filter(lambda x: x.name not in self.bf_connections, bf_workers):
-                ai_ip = self._ai.get_ai_ip(e.name, self._cc.full_ip_range)
+                ai_ip = self._ai.get_ai_ip(e.name, self._cc.real_ip_range)
                 if ai_ip is None:
                     continue
                 h = host.Host(ai_ip)

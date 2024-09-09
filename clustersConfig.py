@@ -672,6 +672,9 @@ class ClusterConfig(kcommon.StructParseBaseNamed):
     external_port: Optional[str]
     ip_mask: Optional[str]
     ip_range: Optional[tuple[str, str]]
+    real_ip_range: Optional[tuple[str, str]]
+    local_bridge_config: Optional[BridgeConfig]
+    remote_bridge_config: Optional[BridgeConfig]
     install_iso: Optional[str]
     ntp_source: Optional[str]
     base_dns_domain: Optional[str]
@@ -729,6 +732,7 @@ class ClusterConfig(kcommon.StructParseBaseNamed):
         *,
         basedir: Optional[str] = None,
         rnd_seed: Optional[str] = None,
+        get_last_ip: Optional[typing.Callable[[], Optional[str]]] = None,
     ) -> "ClusterConfig":
         if basedir is None:
             basedir = os.getcwd()
@@ -932,6 +936,15 @@ class ClusterConfig(kcommon.StructParseBaseNamed):
             if install_iso is not None:
                 raise pctx.value_error("only valid with kind \"iso\"", key="install_iso")
 
+        real_ip_range, local_bridge_config, remote_bridge_config = ClusterConfig._parse_ip_range(
+            pctx,
+            kind=kind,
+            ip_range=ip_range,
+            ip_mask=ip_mask,
+            all_nodes=list(masters.values()) + list(workers.values()),
+            get_last_ip=get_last_ip,
+        )
+
         return ClusterConfig(
             yamlidx=pctx.yamlidx,
             yamlpath=pctx.yamlpath,
@@ -948,6 +961,9 @@ class ClusterConfig(kcommon.StructParseBaseNamed):
             ingress_vip=ingress_vip,
             ip_mask=ip_mask,
             ip_range=ip_range,
+            real_ip_range=real_ip_range,
+            local_bridge_config=local_bridge_config,
+            remote_bridge_config=remote_bridge_config,
             network_api_port=network_api_port,
             external_port=external_port,
             masters=masters,
@@ -956,6 +972,50 @@ class ClusterConfig(kcommon.StructParseBaseNamed):
             preconfig=preconfig,
             postconfig=postconfig,
         )
+
+    @staticmethod
+    def _parse_ip_range(
+        pctx: StructParseParseContext,
+        *,
+        kind: str,
+        ip_mask: Optional[str],
+        ip_range: Optional[tuple[str, str]],
+        all_nodes: list[NodeConfig],
+        get_last_ip: Optional[typing.Callable[[], Optional[str]]] = None,
+    ) -> tuple[Optional[tuple[str, str]], Optional[BridgeConfig], Optional[BridgeConfig]]:
+        if kind != "openshift":
+            return None, None, None
+
+        # Reserve IPs for AI, masters and workers.
+        ip_mask = unwrap(ip_mask)
+        ip_range = unwrap(ip_range)
+
+        n_nodes = len(all_nodes) + 1
+
+        # Get the last IP used in the running cluster.
+        if get_last_ip is not None:
+            last_ip = get_last_ip()
+        else:
+            last_ip = None
+
+        # Update the last IP based on the config.
+        for node in all_nodes:
+            if node.ip and last_ip and ipaddress.IPv4Address(node.ip) > ipaddress.IPv4Address(last_ip):
+                last_ip = node.ip
+
+        if last_ip and ipaddress.IPv4Address(last_ip) > ipaddress.IPv4Address(ip_range[0]) + n_nodes:
+            real_ip_range = ip_range[0], str(ipaddress.ip_address(last_ip) + 1)
+        else:
+            real_ip_range = common.ip_range(ip_range[0], n_nodes)
+
+        if common.ip_range_size(ip_range) < common.ip_range_size(real_ip_range):
+            raise pctx.value_error(f"the supplied IP range {ip_range} is too small for the number of nodes", key="ip_range")
+
+        dynamic_ip_range = common.ip_range(real_ip_range[1], common.ip_range_size(ip_range) - common.ip_range_size(real_ip_range))
+        local_bridge_config = BridgeConfig(ip=real_ip_range[0], mask=ip_mask, dynamic_ip_range=dynamic_ip_range)
+        remote_bridge_config = BridgeConfig(ip=ip_range[1], mask=ip_mask)
+
+        return real_ip_range, local_bridge_config, remote_bridge_config
 
     @staticmethod
     def _parse_hosts(
@@ -1036,6 +1096,7 @@ class MainConfig(kcommon.StructParseBase):
         yamlfile: str,
         basedir: Optional[str] = None,
         rnd_seed: Optional[str] = None,
+        get_last_ip: Optional[typing.Callable[[], Optional[str]]] = None,
     ) -> "MainConfig":
         yamlfile = os.path.normpath(os.path.abspath(yamlfile))
         if basedir is None:
@@ -1048,6 +1109,7 @@ class MainConfig(kcommon.StructParseBase):
                     pctx2,
                     basedir=basedir,
                     rnd_seed=rnd_seed,
+                    get_last_ip=get_last_ip,
                 ),
                 allow_empty=False,
             )
@@ -1101,6 +1163,7 @@ class MainConfig(kcommon.StructParseBase):
         cluster_info_loader: Optional[clusterInfo.ClusterInfoLoader] = None,
         basedir: Optional[str] = None,
         rnd_seed: Optional[str] = None,
+        get_last_ip: Optional[typing.Callable[[], Optional[str]]] = None,
     ) -> 'MainConfig':
         if not os.path.exists(filename):
             raise ValueError(f"Missing YAML configuration at {repr(filename)}")
@@ -1139,6 +1202,7 @@ class MainConfig(kcommon.StructParseBase):
                 yamlfile=filename,
                 basedir=basedir,
                 rnd_seed=rnd_seed,
+                get_last_ip=get_last_ip,
             )
         except Exception as e:
             raise ValueError(f"Error loading YAML file {repr(filename)}: {e}")
@@ -1164,9 +1228,6 @@ class ClustersConfig:
     worker_range: common.RangeList
     main_config: MainConfig
     external_port: str
-    local_bridge_config: BridgeConfig
-    remote_bridge_config: BridgeConfig
-    ip_range: tuple[str, str]
     secrets_path: str
 
     def __init__(
@@ -1177,6 +1238,7 @@ class ClustersConfig:
         worker_range: common.RangeList = common.RangeList.UNLIMITED,
         basedir: Optional[str] = None,
         rnd_seed: Optional[str] = None,
+        get_last_ip: Optional[typing.Callable[[], Optional[str]]] = None,
         test_only: bool = False,
     ):
         self.secrets_path = secrets_path
@@ -1188,6 +1250,7 @@ class ClustersConfig:
             yaml_path,
             basedir=basedir,
             rnd_seed=rnd_seed,
+            get_last_ip=get_last_ip,
         )
 
         self.main_config._owner_reference.init(self)
@@ -1202,41 +1265,11 @@ class ClustersConfig:
             # that are needed.
             return
 
-        if self.cluster_config.kind == "openshift":
-            self.configure_ip_range(self.cluster_config)
-
         for cluster_config in self.main_config.clusters:
             for c in cluster_config.preconfig:
                 c.pre_check()
             for c in cluster_config.postconfig:
                 c.pre_check()
-
-    def configure_ip_range(self, cluster_config: ClusterConfig) -> None:
-        # Reserve IPs for AI, masters and workers.
-        ip_mask = unwrap(cluster_config.ip_mask)
-        ip_range = unwrap(cluster_config.ip_range)
-
-        n_nodes = len(cluster_config.masters) + len(cluster_config.workers) + 1
-
-        # Get the last IP used in the running cluster.
-        last_ip = self.get_last_ip()
-
-        # Update the last IP based on the config.
-        for node in self.all_nodes():
-            if node.ip and last_ip and ipaddress.IPv4Address(node.ip) > ipaddress.IPv4Address(last_ip):
-                last_ip = node.ip
-
-        if last_ip and ipaddress.IPv4Address(last_ip) > ipaddress.IPv4Address(ip_range[0]) + n_nodes:
-            self.ip_range = ip_range[0], str(ipaddress.ip_address(last_ip) + 1)
-        else:
-            self.ip_range = common.ip_range(ip_range[0], n_nodes)
-        logger.info(f"range = {self.ip_range}")
-        if common.ip_range_size(ip_range) < common.ip_range_size(self.ip_range):
-            logger.error_and_exit("The supplied ip_range config is too small for the number of nodes")
-
-        dynamic_ip_range = common.ip_range(self.ip_range[1], common.ip_range_size(ip_range) - common.ip_range_size(self.ip_range))
-        self.local_bridge_config = BridgeConfig(ip=self.ip_range[0], mask=ip_mask, dynamic_ip_range=dynamic_ip_range)
-        self.remote_bridge_config = BridgeConfig(ip=ip_range[1], mask=ip_mask)
 
     @property
     def cluster_config(self) -> ClusterConfig:
@@ -1271,7 +1304,7 @@ class ClustersConfig:
         return self.cluster_config.kubeconfig
 
     @property
-    def full_ip_range(self) -> tuple[str, str]:
+    def real_ip_range(self) -> tuple[str, str]:
         if self.cluster_config.ip_range is None:
             raise ValueError(f"IP range parameter missing for cluster kind {repr(self.kind)}")
         return self.cluster_config.ip_range
@@ -1288,7 +1321,8 @@ class ClustersConfig:
     def hosts(self) -> Mapping[str, HostConfig]:
         return self.cluster_config.hosts
 
-    def get_last_ip(self) -> str | None:
+    @staticmethod
+    def get_last_ip() -> Optional[str]:
         hostconn = host.LocalHost()
         last_ip = "0.0.0.0"
         xml_str = hostconn.run("virsh net-dumpxml default").out
@@ -1317,14 +1351,16 @@ class ClustersConfig:
             return self.external_port
 
     def validate_node_ips(self) -> None:
+        ip_range = unwrap(self.cluster_config.real_ip_range)
+
         def validate_node_ip(n: NodeConfig) -> bool:
-            if n.ip is not None and not common.ip_range_contains(self.ip_range, n.ip):
-                logger.error(f"Node ({n.name} IP ({n.ip}) not in cluster subnet range: {self.ip_range[0]} - {self.ip_range[1]}.")
+            if n.ip is not None and not common.ip_range_contains(ip_range, n.ip):
+                logger.error(f"Node ({n.name} IP ({n.ip}) not in cluster subnet range: {ip_range[0]} - {ip_range[1]}.")
                 return False
             return True
 
         if not all(validate_node_ip(n) for n in self.masters + list(self.cluster_config.workers.values())):
-            logger.error(f"Not all master/worker IPs are in the reserved cluster IP range ({self.ip_range}).  Other hosts in the network might be offered those IPs via DHCP.")
+            logger.error(f"Not all master/worker IPs are in the reserved cluster IP range ({ip_range}).  Other hosts in the network might be offered those IPs via DHCP.")
 
     def validate_external_port(self) -> bool:
         return bool(common.ip_links(host.LocalHost(), ifname=self.get_external_port()))
