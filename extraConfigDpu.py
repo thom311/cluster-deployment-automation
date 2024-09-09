@@ -11,6 +11,8 @@ import imageRegistry
 from common import git_repo_setup
 from dpuVendor import init_vendor_plugin, IpuPlugin
 from imageRegistry import ImageRegistry
+from ktoolbox.common import unwrap
+
 
 DPU_OPERATOR_REPO = "https://github.com/openshift/dpu-operator.git"
 MICROSHIFT_KUBECONFIG = "/root/kubeconfig.microshift"
@@ -151,7 +153,7 @@ def ExtraConfigDpu(cc: ClustersConfig, cfg: ExtraConfigArgs, futures: dict[str, 
     [f.result() for (_, f) in futures.items()]
     logger.info("Running post config step to start DPU operator on IPU")
 
-    repo = cfg.dpu_operator_path
+    repo = unwrap(cfg.dpu_operator_path)
     dpu_node = cc.masters[0]
     assert dpu_node.ip is not None
     acc = host.Host(dpu_node.ip)
@@ -185,7 +187,7 @@ def ExtraConfigDpu(cc: ClustersConfig, cfg: ExtraConfigArgs, futures: dict[str, 
         wait_vsp_ds_running(client)
 
     git_repo_setup(repo, repo_wipe=False, url=DPU_OPERATOR_REPO)
-    if cfg.rebuild_dpu_operators_images:
+    if unwrap(cfg.rebuild_dpu_operators_images):
         dpu_operator_build_push(repo)
     else:
         logger.info("Will not rebuild dpu-operator images")
@@ -218,7 +220,7 @@ def ExtraConfigDpuHost(cc: ClustersConfig, cfg: ExtraConfigArgs, futures: dict[s
     logger.info("Running post config step to start DPU operator on Host")
     lh = host.LocalHost()
     client = K8sClient(cc.kubeconfig)
-    repo = cfg.dpu_operator_path
+    repo = unwrap(cfg.dpu_operator_path)
 
     imgReg = _ensure_local_registry_running(lh, delete_all=False)
     imgReg.ocp_trust(client)
@@ -236,7 +238,7 @@ def ExtraConfigDpuHost(cc: ClustersConfig, cfg: ExtraConfigArgs, futures: dict[s
         wait_vsp_ds_running(client)
 
     git_repo_setup(repo, branch="main", repo_wipe=False, url=DPU_OPERATOR_REPO)
-    if cfg.rebuild_dpu_operators_images:
+    if unwrap(cfg.rebuild_dpu_operators_images):
         dpu_operator_build_push(repo)
     else:
         logger.info("Will not rebuild dpu-operator images")
@@ -251,9 +253,9 @@ def ExtraConfigDpuHost(cc: ClustersConfig, cfg: ExtraConfigArgs, futures: dict[s
         # TODO: Remove when no longer needed
         retries = 3
         h.ssh_connect("core")
-        ret = h.run(f"test -d /sys/class/net/{cfg.dpu_net_interface}")
+        ret = h.run(f"test -d /sys/class/net/{unwrap(cfg.dpu_net_interface)}")
         while ret.returncode != 0:
-            logger.error(f"{h.hostname()} does not have a network device {cfg.dpu_net_interface} cold booting node to try to recover")
+            logger.error(f"{h.hostname()} does not have a network device {unwrap(cfg.dpu_net_interface)} cold booting node to try to recover")
             h.cold_boot()
             logger.info("Cold boot triggered, waiting for host to reboot")
             time.sleep(60)
@@ -261,7 +263,7 @@ def ExtraConfigDpuHost(cc: ClustersConfig, cfg: ExtraConfigArgs, futures: dict[s
             retries = retries - 1
             if retries == 0:
                 logger.error_and_exit(f"Failed to bring up IPU net device on {h.hostname()}")
-            ret = h.run(f"test -d /sys/class/net/{cfg.dpu_net_interface}")
+            ret = h.run(f"test -d /sys/class/net/{unwrap(cfg.dpu_net_interface)}")
 
         # Label the node
         logger.info(f"labeling node {h.hostname()} dpu=true")
