@@ -66,9 +66,6 @@ class ClusterDeployer(BaseDeployer):
         self._secrets_path = secrets_path
         self._bf_iso_path = "/root/iso"
 
-        if self.need_external_network():
-            self._cc.prepare_external_port()
-
         self._local_host = ClusterHost(host.LocalHost(), self._cc.hosts["localhost"], cc, unwrap(cc.cluster_config.local_bridge_config))
         self._remote_hosts = {bm.name: ClusterHost(host.RemoteHost(bm.name), bm, cc, unwrap(cc.cluster_config.remote_bridge_config)) for bm in self._cc.hosts.values() if bm.name != "localhost"}
         self._all_hosts = [self._local_host] + list(self._remote_hosts.values())
@@ -232,7 +229,7 @@ class ClusterDeployer(BaseDeployer):
                 microshift.deploy(
                     secrets_path=self._secrets_path,
                     node=self._cc.masters[0],
-                    external_port=self._cc.external_port,
+                    external_port=self._cc.get_external_port(),
                     version=version,
                 )
             else:
@@ -253,8 +250,10 @@ class ClusterDeployer(BaseDeployer):
         if cc < min_cores:
             logger.error_and_exit(f"Detected {cc} cores on localhost, but need at least {min_cores} cores")
         if self.need_external_network():
-            if not self._cc.validate_external_port():
-                logger.error_and_exit(f"Invalid external port, config is {self._cc.external_port}")
+            try:
+                self._cc.get_external_port()
+            except Exception as e:
+                logger.error_and_exit(f"Invalid external port: {e}")
         else:
             logger.info("Don't need external network so will not set it up")
         self._cc.validate_node_ips()
@@ -437,7 +436,7 @@ class ClusterDeployer(BaseDeployer):
         executor = ThreadPoolExecutor(max_workers=len(self._cc.workers))
 
         # Install all hosts that need to run (or be) workers.
-        preinstall_futures = {h: h.preinstall(self._cc.external_port, executor) for h in hosts_with_workers}
+        preinstall_futures = {h: h.preinstall(self._cc.get_external_port(), executor) for h in hosts_with_workers}
         for h, pf in preinstall_futures.items():
             logger.info(f"Preinstall {h}: {pf.result()}")
 
