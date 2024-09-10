@@ -1,7 +1,7 @@
 import os
 import io
-import sys
 import logging
+import threading
 import re
 import typing
 import functools
@@ -1248,8 +1248,10 @@ class ClustersConfig:
     worker_range: common.RangeList
     main_config: MainConfig
     cluster_index: int
-    external_port: str
     secrets_path: str
+    _external_port: Optional[str]
+    _external_port_validated: bool
+    _lock: threading.Lock
 
     def __init__(
         self,
@@ -1263,6 +1265,7 @@ class ClustersConfig:
         get_last_ip: Optional[typing.Callable[[], Optional[str]]] = None,
         with_system_check: bool = True,
     ):
+        self._lock = threading.Lock()
         self.secrets_path = secrets_path
         self.worker_range = worker_range
 
@@ -1287,7 +1290,8 @@ class ClustersConfig:
 
         self.cluster_index = cluster_index
 
-        self.external_port = self.cluster_config.external_port or "auto"
+        self._external_port = self.cluster_config.external_port
+        self._external_port_validated = False
 
         if with_system_check:
             try:
@@ -1361,18 +1365,25 @@ class ClustersConfig:
         return None
 
     def get_external_port(self) -> str:
-        def autodetect_external_port() -> str:
-            candidate = common.route_to_port(host.LocalHost(), "default")
-            if candidate is None:
-                logger.error("Failed to found port from default route")
-                sys.exit(-1)
+        with self._lock:
+            if self._external_port_validated:
+                return unwrap(self._external_port)
+            rsh = host.LocalHost()
+            if self._external_port is None:
+                candidate = common.route_to_port(rsh, "default")
+                if candidate is None:
+                    raise RuntimeError(f"\"{self.cluster_config}.external_port\": Unable to detect external_port on localhost")
+            else:
+                candidate = self._external_port
+            if not common.ip_links(rsh, ifname=candidate):
+                if self._external_port is None:
+                    raise RuntimeError(f"\"{self.cluster_config}.external_port\": Unable to use detected external port {repr(candidate)} on localhost")
+                else:
+                    raise RuntimeError(f"\"{self.cluster_config}.external_port\": Unable to use external_port {repr(candidate)} on localhost")
+            self._external_port = candidate
+            self._external_port_validated = True
 
-            return candidate
-
-        if self.external_port is None:
-            return autodetect_external_port()
-        else:
-            return self.external_port
+        return candidate
 
     def validate_node_ips(self) -> None:
         ip_range = unwrap(self.cluster_config.real_ip_range)
@@ -1385,9 +1396,6 @@ class ClustersConfig:
 
         if not all(validate_node_ip(n) for n in self.masters + list(self.cluster_config.workers.values())):
             logger.error(f"Not all master/worker IPs are in the reserved cluster IP range ({ip_range}).  Other hosts in the network might be offered those IPs via DHCP.")
-
-    def validate_external_port(self) -> bool:
-        return bool(common.ip_links(host.LocalHost(), ifname=self.get_external_port()))
 
     def all_nodes(self) -> list[NodeConfig]:
         return self.masters + self.workers
