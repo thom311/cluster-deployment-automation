@@ -30,15 +30,6 @@ from libvirt import Libvirt
 from ktoolbox.common import unwrap
 
 
-def match_to_proper_version_format(version_cluster_config: str) -> str:
-    regex_pattern = r'^\d+\.\d+'
-    match = re.match(regex_pattern, version_cluster_config)
-    logger.info(f"getting version to match with format XX.X using regex {regex_pattern}")
-    if not match:
-        logger.error_and_exit(f"Invalid match {match}")
-    return match.group(0)
-
-
 _BF_ISO_PATH = "/root/iso"
 
 
@@ -75,14 +66,11 @@ class ClusterDeployer(BaseDeployer):
         self._all_nodes = {k8s_node.config.name: k8s_node for h in self._all_hosts for k8s_node in h._k8s_nodes()}
 
         self.masters_arch = "x86_64"
-        is_bf_map = [x.kind == "bf" for x in self._cc.workers]
-        self.is_bf = any(is_bf_map)
-        if self.is_bf:
-            if not all(is_bf_map):
-                logger.error_and_exit("Not yet supported to have mixed BF and non-bf workers")
+        if self._cc.cluster_config.has_bf_workers:
             self.workers_arch = "arm64"
         else:
             self.workers_arch = "x86_64"
+
         self._validate()
 
     def _all_hosts_with_masters(self) -> set[ClusterHost]:
@@ -225,17 +213,12 @@ class ClusterDeployer(BaseDeployer):
                 else:
                     logger.info("Skipping worker creation.")
         if self._cc.kind == "microshift":
-            version = match_to_proper_version_format(self._cc.version)
-
-            if len(self._cc.masters) == 1:
-                microshift.deploy(
-                    secrets_path=self._secrets_path,
-                    node=self._cc.masters[0],
-                    external_port=self._cc.get_external_port(),
-                    version=version,
-                )
-            else:
-                logger.error_and_exit("Masters must be of length one for deploying microshift")
+            microshift.deploy(
+                secrets_path=self._secrets_path,
+                node=self._cc.cluster_config.single_master,
+                external_port=self._cc.get_external_port(),
+                version=self._cc.cluster_config.ocp_version,
+            )
         if POST_STEP in self.steps:
             self._postconfig()
         else:
@@ -244,8 +227,6 @@ class ClusterDeployer(BaseDeployer):
     def _validate(self) -> None:
         if self._cc.cluster_config.is_sno:
             logger.info("Setting up a Single Node OpenShift (SNO) environment")
-            if self._cc.masters[0].ip is None:
-                logger.error_and_exit("Missing ip on master")
 
         min_cores = 28
         cc = int(self._local_host.hostconn.run("nproc").out)
@@ -442,7 +423,7 @@ class ClusterDeployer(BaseDeployer):
             logger.info(f"Preinstall {h}: {pf.result()}")
 
         # Start all workers on all hosts.
-        if not self.is_bf:
+        if not self._cc.cluster_config.has_bf_workers:
             iso_path = os.getcwd()
         else:
             # BF images are NFS mounted from _BF_ISO_PATH.
@@ -652,36 +633,25 @@ class ClusterDeployer(BaseDeployer):
 class IsoDeployer(BaseDeployer):
     def __init__(self, cc: ClustersConfig, steps: list[str]):
         super().__init__(cc, steps)
-
-        if len(self._cc.masters) != 1:
-            logger.error("Masters must be of length one for deploying from iso")
-            sys.exit(-1)
-        self._master = self._cc.masters[0]
-        self._futures[self._master.name] = common.empty_future(host.Result)
-        self._validate()
-
-    def _validate(self) -> None:
-        if self._master.mac is None:
-            logger.error_and_exit(f"No MAC address provided for cluster {self._cc.name}, exiting")
-        if self._master.ip is None:
-            logger.error_and_exit(f"No IP address provided for cluster {self._cc.name}, exiting")
-        if self._master.name is None:
-            logger.error_and_exit(f"No name provided for cluster {self._cc.name}, exiting")
-        if not self._cc.network_api_port or self._cc.network_api_port == "auto":
-            logger.error_and_exit(f"Network API port with connection to {self._cc.name} must be specified, exiting")
+        master = self._cc.cluster_config.single_master
+        self._futures[master.name] = common.empty_future(host.Result)
 
     def deploy(self) -> None:
-        if self._cc.masters:
-            if PRE_STEP in self.steps:
-                self._preconfig()
-            else:
-                logger.info("Skipping pre configuration.")
+        if PRE_STEP in self.steps:
+            self._preconfig()
+        else:
+            logger.info("Skipping pre configuration.")
 
-            if MASTERS_STEP in self.steps:
-                # TODO: We need to either auto-detect the hardware (IPU versus some other vendor) or take this as an additional config param.
-                isoCluster.IPUIsoBoot(self._cc, self._master, unwrap(self._cc.cluster_config.install_iso))
-            else:
-                logger.info("Skipping master creation.")
+        if MASTERS_STEP in self.steps:
+            # TODO: We need to either auto-detect the hardware (IPU versus some other vendor) or take this as an additional config param.
+            isoCluster.IPUIsoBoot(
+                node=self._cc.cluster_config.single_master,
+                iso=unwrap(self._cc.cluster_config.install_iso),
+                network_api_port=unwrap(self._cc.cluster_config.network_api_port),
+                get_external_port=self._cc.get_external_port,
+            )
+        else:
+            logger.info("Skipping master creation.")
 
         if POST_STEP in self.steps:
             self._postconfig()
