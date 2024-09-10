@@ -213,7 +213,12 @@ class ClusterDeployer(BaseDeployer):
 
             if len(self._cc.masters) == 1:
                 duration[MASTERS_STEP].start()
-                microshift.deploy(self._secrets_path, self._cc.masters[0], self._cc.get_external_port(), version)
+                microshift.deploy(
+                    secrets_path=self._secrets_path,
+                    node=self._cc.masters[0],
+                    external_port=self._cc.get_external_port(),
+                    version=version,
+                )
                 duration[MASTERS_STEP].stop()
             else:
                 logger.error_and_exit("Masters must be of length one for deploying microshift")
@@ -237,8 +242,10 @@ class ClusterDeployer(BaseDeployer):
         if cc < min_cores:
             logger.error_and_exit(f"Detected {cc} cores on localhost, but need at least {min_cores} cores")
         if self.need_external_network():
-            if not self._cc.validate_external_port():
-                logger.error_and_exit(f"Invalid external port, config is {self._cc.get_external_port()}")
+            try:
+                self._cc.get_external_port()
+            except Exception as e:
+                logger.error_and_exit(f"Invalid external port: {e}")
         else:
             logger.info("Don't need external network so will not set it up")
         self._cc.validate_node_ips()

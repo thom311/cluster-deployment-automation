@@ -69,6 +69,7 @@ class ClusterSnapshotter:
         executor = ThreadPoolExecutor(max_workers=len(not_vms) + 1)
         futures = []
         for e in not_vms:
+            self._cc.get_external_port()
             futures.append(executor.submit(save_phys, e.node))
         futures.append(executor.submit(save_vms))
         for x in futures:
@@ -116,6 +117,7 @@ class ClusterSnapshotter:
         executor = ThreadPoolExecutor(max_workers=len(not_vms) + 1)
         futures = []
         for e in not_vms:
+            self._cc.get_external_port()
             futures.append(executor.submit(load_phys, e.node))
         futures.append(executor.submit(load_vms))
         for x in futures:
