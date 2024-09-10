@@ -4,9 +4,9 @@ import shlex
 from pathlib import Path
 import shutil
 import time
+import typing
 import urllib.parse
 from logger import logger
-from clustersConfig import ClustersConfig
 from clustersConfig import NodeConfig
 from dhcpConfig import dhcp_config_from_file, DHCPD_CONFIG_PATH, DHCPD_CONFIG_BACKUP_PATH, CDA_TAG, get_subnet_range
 import host
@@ -145,7 +145,12 @@ def is_http_url(url: str) -> bool:
         return False
 
 
-def _redfish_boot_ipu(cc: ClustersConfig, node: NodeConfig, iso: str) -> None:
+def _redfish_boot_ipu(
+    *,
+    node: NodeConfig,
+    iso: str,
+    get_external_port: typing.Callable[[], str],
+) -> None:
     def helper(node: NodeConfig) -> str:
         logger.info(f"Booting {node.bmc} with {iso_address}")
         bmc = node.create_bmc()
@@ -176,7 +181,7 @@ def _redfish_boot_ipu(cc: ClustersConfig, node: NodeConfig, iso: str) -> None:
         serve_path = os.path.dirname(iso)
         iso_name = os.path.basename(iso)
         lh = host.LocalHost()
-        lh_ip = common.port_to_ip(lh, cc.get_external_port())
+        lh_ip = common.port_to_ip(lh, get_external_port())
 
         with common.HttpServerManager(serve_path, 8000) as http_server:
             iso_address = f"http://{lh_ip}:{str(http_server.port)}/{iso_name}"
@@ -230,14 +235,22 @@ def _pxeboot_marvell_dpu(name: str, node: str, mac: str, ip: str, iso: str) -> N
         raise RuntimeError(f"Failure to to pxeboot: {r}")
 
 
-def IPUIsoBoot(cc: ClustersConfig, node: NodeConfig, iso: str) -> None:
+def IPUIsoBoot(
+    *,
+    node: NodeConfig,
+    iso: str,
+    network_api_port: str,
+    get_external_port: typing.Callable[[], str],
+) -> None:
     if node.kind == "marvell-dpu":
-        assert node.ip
-        _pxeboot_marvell_dpu(node.name, node.node, node.mac, node.ip, iso)
+        _pxeboot_marvell_dpu(node.name, node.node, node.mac, unwrap(node.ip), iso)
     else:
-        _redfish_boot_ipu(cc, node, iso)
-    assert node.ip is not None
-    configure_iso_network_port(cc.network_api_port, node.ip)
+        _redfish_boot_ipu(
+            node=node,
+            iso=iso,
+            get_external_port=get_external_port,
+        )
+    configure_iso_network_port(network_api_port, unwrap(node.ip))
     configure_dhcpd(node)
     enable_acc_connectivity(node)
 
