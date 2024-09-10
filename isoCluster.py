@@ -176,8 +176,7 @@ def _redfish_boot_ipu(cc: ClustersConfig, node: NodeConfig, iso: str) -> None:
         serve_path = os.path.dirname(iso)
         iso_name = os.path.basename(iso)
         lh = host.LocalHost()
-        cc.prepare_external_port()
-        lh_ip = common.port_to_ip(lh, cc.external_port)
+        lh_ip = common.port_to_ip(lh, cc.get_external_port())
 
         with common.HttpServerManager(serve_path, 8000) as http_server:
             iso_address = f"http://{lh_ip}:{str(http_server.port)}/{iso_name}"
