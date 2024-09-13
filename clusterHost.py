@@ -8,7 +8,7 @@ import common
 import coreosBuilder
 import host
 from clustersConfig import BridgeConfig, ClustersConfig, HostConfig, NodeConfig
-from clusterNode import ClusterNode, X86ClusterNode, VmClusterNode, BFClusterNode
+from clusterNode import ClusterNode, X86ClusterNode
 from virtualBridge import VirBridge
 from virshPool import VirshPool
 from ktoolbox.common import unwrap
@@ -49,19 +49,15 @@ class ClusterHost:
         self.api_port = None
 
         def _create_k8s_nodes(configs: list[NodeConfig]) -> list[ClusterNode]:
-            nodes: list[ClusterNode] = []
-            for node_config in configs:
-                if node_config.node != self.config.name:
-                    continue
-                if node_config.kind == "vm":
-                    nodes.append(VmClusterNode(self.hostconn, node_config))
-                elif node_config.kind == "physical":
-                    nodes.append(X86ClusterNode(node_config, cc.get_external_port()))
-                elif node_config.kind == "bf":
-                    nodes.append(BFClusterNode(node_config, cc.get_external_port()))
-                else:
-                    raise ValueError()
-            return nodes
+            return [
+                ClusterNode.create(
+                    cc=cc,
+                    node_config=node_config,
+                    hostconn=self.hostconn,
+                )
+                for node_config in configs
+                if node_config.node == self.config.name
+            ]
 
         self.k8s_master_nodes = _create_k8s_nodes(cc.masters)
         self.k8s_worker_nodes = _create_k8s_nodes(cc.workers)
