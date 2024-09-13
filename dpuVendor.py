@@ -3,25 +3,13 @@ import re
 import host
 from k8sClient import K8sClient
 from logger import logger
-from abc import ABC, abstractmethod
+from abc import ABC
 from imageRegistry import ImageRegistry
 import os
 
 
 class VendorPlugin(ABC):
-    @abstractmethod
-    def build_push_start(self, h: host.Host, client: K8sClient, imgReg: ImageRegistry) -> None:
-        raise NotImplementedError("Must implement build_and_start() for VSP")
-
-    @staticmethod
-    def render_dpu_vsp_ds(vsp_ds_manifest: str, ipu_plugin_image: str, outfilename: str) -> None:
-        with open(vsp_ds_manifest) as f:
-            j2_template = jinja2.Template(f.read())
-            rendered = j2_template.render(ipu_plugin_image=ipu_plugin_image)
-            logger.info(rendered)
-
-        with open(outfilename, "w") as outFile:
-            outFile.write(rendered)
+    pass
 
 
 class IpuPlugin(VendorPlugin):
@@ -98,12 +86,7 @@ class IpuPlugin(VendorPlugin):
 
 
 class MarvellDpuPlugin(VendorPlugin):
-    def __init__(self) -> None:
-        pass
-
-    def build_push_start(self, h: host.Host, client: K8sClient, imgReg: ImageRegistry) -> None:
-        # TODO: https://github.com/openshift/dpu-operator/pull/82
-        logger.warning("Setting up Marvell DPU not yet implemented")
+    pass
 
 
 def init_vendor_plugin(h: host.Host, *, node_kind: str) -> VendorPlugin:
