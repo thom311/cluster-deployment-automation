@@ -45,13 +45,19 @@ class ClusterNode:
         node_config: NodeConfig,
         hostconn: host.Host,
     ) -> 'ClusterNode':
-        if node_config.kind == "vm":
-            return VmClusterNode(hostconn, node_config)
-        if node_config.kind == "physical":
-            return X86ClusterNode(node_config, cc.get_external_port())
-        if node_config.kind == "bf":
-            return BFClusterNode(node_config, cc.get_external_port())
-        raise ValueError(f"Cannot create ClusterNode for node kind {repr(node_config.kind)}")
+        if cc.kind == "iso":
+            if node_config.kind == "marvell-dpu":
+                return MarvellDpuNode(node_config)
+            if node_config.kind == "ipu":
+                return IpuNode(node_config)
+        else:
+            if node_config.kind == "vm":
+                return VmClusterNode(hostconn, node_config)
+            if node_config.kind in ("physical", "marvell-dpu", "ipu"):
+                return X86ClusterNode(node_config, cc.get_external_port())
+            if node_config.kind == "bf":
+                return BFClusterNode(node_config, cc.get_external_port())
+        raise ValueError(f"Cannot create ClusterNode for node kind {repr(node_config.kind)} and cluster kind {cc.kind}")
 
     def ip(self) -> str:
         if self.config.ip is not None:
@@ -349,3 +355,13 @@ class BFClusterNode(ClusterNode):
             return result.success()
         else:
             logger.error_and_exit(f"Couldn't find ip of worker {self.config.name}")
+
+
+class MarvellDpuNode(ClusterNode):
+    def start(self, iso_or_image_path: str) -> bool:
+        raise RuntimeError("Not implemented")
+
+
+class IpuNode(ClusterNode):
+    def start(self, iso_or_image_path: str) -> bool:
+        raise RuntimeError("Not implemented")
