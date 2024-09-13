@@ -1,5 +1,10 @@
 import time
 import re
+import typing
+from typing import Optional
+
+if typing.TYPE_CHECKING:
+    from types import TracebackType
 
 
 class StopWatch:
@@ -37,6 +42,21 @@ class StopWatch:
             raise ValueError("Invalid time format. Expected format like '1d2h30m15.5s'.")
         days, hours, minutes, seconds = (float(x or 0) for x in match.groups())
         self.end_time = self.start_time + int(days * 86400 + hours * 3600 + minutes * 60 + seconds)
+
+    def __enter__(self) -> 'StopWatch':
+        # FIXME: This is wrong. We need StopWatch to keep track of passed time,
+        # so we can repeatedly start/stop it. We cannot just reset the start-time
+        # here, because then the StopWatch can only be used for one run at a time.
+        self.start()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional["TracebackType"],
+    ) -> None:
+        self.stop()
 
 
 class Timer:
