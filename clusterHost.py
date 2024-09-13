@@ -255,3 +255,16 @@ class ClusterHost:
     def teardown_nodes(self, nodes: list[ClusterNode]) -> None:
         for node in nodes:
             node.teardown()
+
+    def deploy(self, *, cluster_kind: str) -> None:
+        if cluster_kind == "iso":
+            master_node = kcommon.iter_get_first(self.k8s_master_nodes, single=True)
+            isoCluster.IPUIsoBoot(
+                node=self._cc.cluster_config.single_master,
+                iso=unwrap(self._cc.cluster_config.install_iso),
+                network_api_port=unwrap(self._cc.cluster_config.network_api_port),
+                get_external_port=self._cc.get_external_port,
+            )
+            return
+
+        raise RuntimeError(f"Unexpected cluster kind {repr(cluster_kind)}")

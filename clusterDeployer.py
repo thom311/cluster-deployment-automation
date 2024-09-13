@@ -30,6 +30,7 @@ from arguments import PRE_STEP, WORKERS_STEP, MASTERS_STEP, POST_STEP
 import isoCluster
 from libvirt import Libvirt
 from ktoolbox.common import unwrap
+import ktoolbox.common as kcommon
 
 _bf_iso_path = "/root/iso"
 
@@ -335,13 +336,11 @@ class ClusterDeployer:
                 logger.info(f"deploy cluster: skip {MASTERS_STEP} step")
                 return
             logger.info("create cluster: start iso deploy")
-            # TODO: We need to either auto-detect the hardware (IPU versus some other vendor) or take this as an additional config param.
-            isoCluster.IPUIsoBoot(
-                node=self._cc.cluster_config.single_master,
-                iso=unwrap(self._cc.cluster_config.install_iso),
-                network_api_port=unwrap(self._cc.cluster_config.network_api_port),
-                get_external_port=self._cc.get_external_port,
+            master_host = kcommon.iter_get_first(
+                self._all_hosts_with_masters(),
+                single=True,
             )
+            master_host.deploy_iso()
             return
 
         if self._cc.kind == "openshift":

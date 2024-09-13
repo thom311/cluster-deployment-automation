@@ -1,6 +1,7 @@
 import abc
 import os
 import paramiko
+import shlex
 import sys
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -9,9 +10,11 @@ from typing import Optional
 
 import common
 import host
+import dhcpConfig
 from clustersConfig import NodeConfig
 from clustersConfig import ClustersConfig
 from nfs import NFS
+from ktoolbox.common import unwrap
 
 
 class ClusterNode:
@@ -359,8 +362,68 @@ class BFClusterNode(ClusterNode):
 
 
 class MarvellDpuNode(ClusterNode):
+    """
+    For now, this implements a DPU for NodeConfig.kind=="marvell-dpu". Maybe
+    in the future we can factor our common grounds, and make this applicable
+    to other "iso" cluster nodes.
+    """
+
+    def _pxeboot(self, iso: str) -> host.Result:
+        name = self.config.name
+        node = self.config.node
+        mac = self.config.mac
+        ip = unwrap(self.config.ip)
+
+        rsh = host.RemoteHost(node)
+        rsh.ssh_connect("core")
+
+        ip_addr = f"{ip}/24"
+        ip_gateway, _ = dhcpConfig.get_subnet_range(ip, "255.255.255.0")
+
+        # An empty entry means to use the host's "id_ed25519.pub". We want that.
+        ssh_keys = [""]
+        for pub_file, pub_key_content, priv_key_file in common.iterate_ssh_keys():
+            ssh_keys.append(pub_key_content)
+
+        ssh_key_options = [f"--ssh-key={shlex.quote(s)}" for s in ssh_keys]
+
+        image = os.environ.get("CDA_MARVELL_TOOLS_IMAGE", "quay.io/sdaniele/marvell-tools:latest")
+
+        r = rsh.run(
+            "sudo "
+            "podman "
+            "run "
+            "--pull always "
+            "--rm "
+            "--replace "
+            "--privileged "
+            "--pid host "
+            "--network host "
+            "--user 0 "
+            "--name marvell-tools "
+            "-i "
+            "-v /:/host "
+            "-v /dev:/dev "
+            f"{shlex.quote(image)} "
+            "./pxeboot.py "
+            f"--dpu-name={shlex.quote(name)} "
+            "--host-mode=coreos "
+            f"--nm-secondary-cloned-mac-address={shlex.quote(mac)} "
+            f"--nm-secondary-ip-address={shlex.quote(ip_addr)} "
+            f"--nm-secondary-ip-gateway={shlex.quote(ip_gateway)} "
+            "--yum-repos=rhel-nightly "
+            f"{' '.join(ssh_key_options)} "
+            f"{shlex.quote(iso)} "
+            "2>&1"
+        )
+
+        if not r.success():
+            logger.error(f"Failure to to pxeboot: {r}")
+
+        return r
+
     def start(self, iso_or_image_path: str, executor: ThreadPoolExecutor) -> None:
-        raise RuntimeError("Not implemented")
+        self.future = executor.submit(self._pxeboot, iso_or_image_path)
 
 
 class IsoClusterNode(ClusterNode):
