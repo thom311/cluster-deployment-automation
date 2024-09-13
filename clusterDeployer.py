@@ -30,6 +30,9 @@ from libvirt import Libvirt
 from ktoolbox.common import unwrap
 
 
+_bf_iso_path = "/root/iso"
+
+
 class BaseDeployer(abc.ABC):
     def __init__(self, cc: ClustersConfig, steps: list[str]):
         self._cc = cc
@@ -54,7 +57,6 @@ class ClusterDeployer(BaseDeployer):
         super().__init__(cc, steps)
         self._client: Optional[K8sClient] = None
         self._ai = ai
-        self._bf_iso_path = "/root/iso"
 
         self._local_host = ClusterHost(host.LocalHost(), self._cc.hosts["localhost"], cc, unwrap(cc.cluster_config.local_bridge_config))
         self._remote_hosts = {bm.name: ClusterHost(host.RemoteHost(bm.name), bm, cc, unwrap(cc.cluster_config.remote_bridge_config)) for bm in self._cc.hosts.values() if bm.name != "localhost"}
@@ -423,14 +425,14 @@ class ClusterDeployer(BaseDeployer):
         if not self._cc.cluster_config.has_bf_workers:
             iso_path = os.getcwd()
         else:
-            # BF images are NFS mounted from self._bf_iso_path.
-            iso_path = self._bf_iso_path
+            # BF images are NFS mounted from _bf_iso_path.
+            iso_path = _bf_iso_path
 
-        os.makedirs(self._bf_iso_path, exist_ok=True)
+        os.makedirs(_bf_iso_path, exist_ok=True)
         self._ai.download_iso_with_retry(infra_env, iso_path)
         iso_file = os.path.join(iso_path, f"{infra_env}.iso")
         ssh_priv_key_path = self._get_discovery_ign_ssh_priv_key(infra_env)
-        shutil.copyfile(ssh_priv_key_path, os.path.join(self._bf_iso_path, "ssh_priv_key"))
+        shutil.copyfile(ssh_priv_key_path, os.path.join(_bf_iso_path, "ssh_priv_key"))
 
         futures = []
         for h in hosts_with_workers:
