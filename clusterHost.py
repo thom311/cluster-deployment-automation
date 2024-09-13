@@ -23,7 +23,7 @@ class ClusterHost:
     """
 
     hostconn: host.Host
-    bridge: VirBridge
+    _bridge: Optional[VirBridge]
     config: HostConfig
     needs_api_network: bool
     api_port: Optional[str]
@@ -33,7 +33,7 @@ class ClusterHost:
 
     __slots__ = [
         "hostconn",
-        "bridge",
+        "_bridge",
         "config",
         "needs_api_network",
         "api_port",
@@ -42,8 +42,8 @@ class ClusterHost:
         "hosts_vms",
     ]
 
-    def __init__(self, h: host.Host, c: HostConfig, cc: ClustersConfig, bc: BridgeConfig):
-        self.bridge = VirBridge(h, bc)
+    def __init__(self, h: host.Host, c: HostConfig, cc: ClustersConfig, bc: Optional[BridgeConfig]):
+        self._bridge = None
         self.hostconn = h
         self.config = c
         self.api_port = None
@@ -63,6 +63,9 @@ class ClusterHost:
         self.k8s_worker_nodes = _create_k8s_nodes(cc.workers)
         self.hosts_vms = any(k8s_node.config.kind == "vm" for k8s_node in self._k8s_nodes())
 
+        if self.hosts_vms or bc is not None:
+            self._bridge = VirBridge(h, unwrap(bc))
+
         if not self.config.pre_installed:
             self.hostconn.need_sudo()
 
@@ -81,6 +84,10 @@ class ClusterHost:
             else:
                 self.api_port = self.config.network_api_port
             logger.info(f"Using {self.api_port} as network API port")
+
+    @property
+    def bridge(self) -> VirBridge:
+        return unwrap(self._bridge)
 
     def _k8s_nodes(self) -> list[ClusterNode]:
         return self.k8s_master_nodes + self.k8s_worker_nodes
