@@ -9,6 +9,7 @@ from typing import Optional
 import common
 import host
 from clustersConfig import NodeConfig
+from clustersConfig import ClustersConfig
 from nfs import NFS
 from ktoolbox.common import unwrap
 
@@ -38,6 +39,21 @@ class ClusterNode:
         self.config = config
         self.future = common.empty_future(host.Result)
         self.dynamic_ip = None
+
+    @staticmethod
+    def create(
+        *,
+        cc: ClustersConfig,
+        node_config: NodeConfig,
+        hostconn: host.Host,
+    ) -> 'ClusterNode':
+        if node_config.kind == "vm":
+            return VmClusterNode(hostconn, node_config)
+        if node_config.kind == "physical":
+            return X86ClusterNode(node_config, cc.get_external_port())
+        if node_config.kind == "bf":
+            return BFClusterNode(node_config, cc.get_external_port())
+        raise ValueError(f"Cannot create ClusterNode for node kind {repr(node_config.kind)}")
 
     def ip(self) -> str:
         if self.config.ip is not None:
