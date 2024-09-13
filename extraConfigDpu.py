@@ -9,7 +9,7 @@ from logger import logger
 from clustersConfig import ExtraConfigArgs
 import imageRegistry
 from common import git_repo_setup
-from dpuVendor import init_vendor_plugin
+from dpuVendor import init_vendor_plugin, IpuPlugin
 import common
 import re
 from ktoolbox.common import unwrap
@@ -144,7 +144,8 @@ def ExtraConfigDpu(cc: ClustersConfig, cfg: ExtraConfigArgs, futures: dict[str, 
     vendor_plugin = init_vendor_plugin(acc, node_kind=dpu_node.kind)
     # TODO: Remove when this container is properly started by the vsp
     # We need to manually start the p4 sdk container currently for the IPU plugin
-    vendor_plugin.build_push_start(acc, imgReg)
+    if isinstance(vendor_plugin, IpuPlugin):
+        vendor_plugin.build_push_start(acc, imgReg)
 
     repo = unwrap(cfg.dpu_operator_path_abs)
     dpu_operator = DpuOperator(repo)
@@ -183,8 +184,7 @@ def ExtraConfigDpuHost(cc: ClustersConfig, cfg: ExtraConfigArgs, futures: dict[s
     dpu_operator.build_push(unwrap(cfg.builder_image), unwrap(cfg.base_image))
     dpu_operator.start(client)
 
-    # Assuming that all workers have a DPU
-    for e in cc.workers:
+    for e in dpu_workers:
         logger.info(f"labeling node {e.name} dpu=true")
         client.oc_run_or_die(f"label no {e.name} dpu=true")
 
