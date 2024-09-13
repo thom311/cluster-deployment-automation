@@ -8,6 +8,7 @@ from typing import Optional
 from typing import Generator
 from typing import Union
 from typing import Callable
+import collections.abc
 import re
 import logging
 from assistedInstaller import AssistedClientAutomation
@@ -22,8 +23,9 @@ from logger import logger
 import microshift
 from clusterHost import ClusterHost
 import dnsutil
+import timer
 from virshPool import VirshPool
-from arguments import PRE_STEP, WORKERS_STEP, MASTERS_STEP, POST_STEP
+from arguments import PRE_STEP, WORKERS_STEP, MASTERS_STEP, POST_STEP, all_steps
 from libvirt import Libvirt
 from baseDeployer import BaseDeployer
 from ktoolbox.common import unwrap
@@ -90,13 +92,19 @@ class ClusterDeployer(BaseDeployer):
     is hardcoded to be the network hosting the API network.
     """
 
-    def teardown_masters(self) -> None:
+    def teardown_masters(self, *, force: bool = True) -> None:
         cluster_name = self._cc.name
+        if self._cc.kind != "openshift":
+            logger.info(f"tear down masters: skipping for cluster kind {self._cc.kind}")
+            return
+        if not force and not self._cc.masters:
+            logger.info("tear down masters: skip without masters")
         if MASTERS_STEP not in self.steps:
-            logger.info(f"Not tearing down {cluster_name}")
+            logger.info(f"tear down masters: skip {MASTERS_STEP} step")
             return
 
-        logger.info(f"Tearing down {cluster_name}")
+        logger.info(f"tear down masters: start tearing down masters on {cluster_name}")
+
         self._ai.ensure_cluster_deleted(self._cc.name)
 
         self.update_dnsmasq(setup=False)
@@ -122,16 +130,24 @@ class ClusterDeployer(BaseDeployer):
 
         AssistedClientAutomation.delete_kubeconfig_and_secrets(self._cc.name, self._cc.kubeconfig)
 
-    def teardown_workers(self) -> None:
+    def teardown_workers(self, *, force: bool = True) -> None:
         cluster_name = self._cc.name
+        if self._cc.kind != "openshift":
+            logger.info(f"tear down workers: skipping for cluster kind {self._cc.kind}")
+            return
+        if not force and not self._cc.masters:
+            logger.info("tear down workers: skipping without masters")
+            return
 
         # If workers not in steps (and masters set), teardown the workers to avoid dangling vms.
-        if WORKERS_STEP in self.steps and MASTERS_STEP not in self.steps:
-            logger.info(f"Tearing down (some) workers on {cluster_name}")
-        elif MASTERS_STEP in self.steps:
-            logger.info(f"Tearing down (some) workers on {cluster_name} before tearing down masters")
-        else:
+        if WORKERS_STEP not in self.steps and MASTERS_STEP not in self.steps:
+            logger.info(f"preconfig step: skip {WORKERS_STEP} and {MASTERS_STEP} step")
             return
+
+        if force or WORKERS_STEP in self.steps:
+            logger.info(f"tear down workers: start tearing down (some) workers on {cluster_name}")
+        else:
+            logger.info(f"tear down workers: start tearing down (some) workers on {cluster_name} before tearing down masters")
 
         for h in self._all_hosts_with_workers():
             h.teardown_nodes(h.k8s_worker_nodes)
@@ -168,50 +184,19 @@ class ClusterDeployer(BaseDeployer):
         return remote_masters != 0 or remote_workers != 0 or len(vm_bm) != 0
 
     def deploy(self) -> None:
-        duration = self._empty_timers()
-        if self._cc.masters:
-            if PRE_STEP in self.steps:
-                duration[PRE_STEP].start()
-                self._preconfig()
-                duration[PRE_STEP].stop()
-            else:
-                logger.info("Skipping pre configuration.")
-
-            if self._cc.kind != "microshift":
-                if WORKERS_STEP in self.steps or MASTERS_STEP in self.steps:
-                    self.teardown_workers()
-                if MASTERS_STEP in self.steps:
-                    duration[MASTERS_STEP].start()
-                    self.teardown_masters()
-                    self.create_cluster()
-                    self.create_masters()
-                    duration[MASTERS_STEP].stop()
-                else:
-                    logger.info("Skipping master creation.")
-
-                if WORKERS_STEP in self.steps:
-                    duration[WORKERS_STEP].start()
-                    self.create_workers()
-                    duration[WORKERS_STEP].stop()
-                else:
-                    logger.info("Skipping worker creation.")
-        if self._cc.kind == "microshift":
-            duration[MASTERS_STEP].start()
-            microshift.deploy(
-                secrets_path=self._cc.secrets_path,
-                node=self._cc.cluster_config.single_master,
-                external_port=self._cc.get_external_port(),
-                version=self._cc.cluster_config.ocp_version,
-            )
-            duration[MASTERS_STEP].stop()
-        if POST_STEP in self.steps:
-            duration[POST_STEP].start()
+        duration = {k: timer.StopWatch() for k in all_steps()}
+        with duration[PRE_STEP]:
+            self._preconfig()
+        with duration[WORKERS_STEP]:
+            self.teardown_workers(force=False)
+        with duration[MASTERS_STEP]:
+            self.teardown_masters(force=False)
+        self._deploy_cluster(duration)
+        with duration[POST_STEP]:
             self._postconfig()
-            duration[POST_STEP].stop()
-        else:
-            logger.info("Skipping post configuration.")
         for k, v in duration.items():
-            logger.info(f"{k}: {v.duration()}")
+            if k in self.steps:
+                logger.info(f"{k}: {v.duration()}")
 
     def _validate(self) -> None:
         if self._cc.cluster_config.is_sno:
@@ -256,8 +241,63 @@ class ClusterDeployer(BaseDeployer):
             self._client = K8sClient(self._cc.kubeconfig)
         return self._client
 
-    def create_cluster(self) -> None:
-        cluster_name = self._cc.name
+    def _preconfig(self) -> None:
+        if not self._cc.masters:
+            logger.info("preconfig step: skipping without masters")
+            return
+        if PRE_STEP not in self.steps:
+            logger.info(f"preconfig step: skip {PRE_STEP} step")
+            return
+        logger.info("preconfig step: start")
+        for e in self._cc.cluster_config.preconfig:
+            self._prepost_config(e)
+
+    def _postconfig(self) -> None:
+        if POST_STEP not in self.steps:
+            logger.info(f"postconfig step: skip {POST_STEP} step")
+            return
+        logger.info("postconfig step: start")
+        for e in self._cc.cluster_config.postconfig:
+            self._prepost_config(e)
+
+    def _deploy_cluster(self, duration: collections.abc.Mapping[str, timer.StopWatch]) -> None:
+        if self._cc.kind == "microshift":
+            with duration[MASTERS_STEP]:
+                if MASTERS_STEP not in self.steps:
+                    logger.info(f"deploy cluster: skip {MASTERS_STEP} step")
+                    return
+                logger.info("deploy cluster: start microshift deploy")
+                microshift.deploy(
+                    secrets_path=self._cc.secrets_path,
+                    node=self._cc.cluster_config.single_master,
+                    external_port=self._cc.get_external_port(),
+                    version=self._cc.cluster_config.ocp_version,
+                )
+            return
+
+        if self._cc.kind == "openshift":
+            logger.info("deploy cluster: start openshift deploy")
+            with duration[MASTERS_STEP]:
+                self._create_cluster()
+                self._create_masters()
+            with duration[WORKERS_STEP]:
+                self._create_workers()
+            return
+
+        assert False
+
+    def _create_cluster(self) -> None:
+        if self._cc.kind != "openshift":
+            logger.info(f"create cluster: skip for cluster type {self._cc.kind}")
+            return
+        if not self._cc.masters:
+            logger.info("create cluster: skip without masters")
+            return
+        if MASTERS_STEP not in self.steps:
+            logger.info(f"create cluster: skip {MASTERS_STEP} step")
+            return
+        logger.info("create cluster: start")
+
         cfg: dict[str, Union[str, bool, list[str], list[dict[str, str]]]] = {}
         cfg["openshift_version"] = self._cc.version
         cfg["cpu_architecture"] = "multi"
@@ -287,9 +327,21 @@ class ClusterDeployer(BaseDeployer):
 
         logger.info("Creating cluster")
         logger.info(cfg)
-        self._ai.create_cluster(cluster_name, cfg)
+        self._ai.create_cluster(self._cc.name, cfg)
 
-    def create_masters(self) -> None:
+    def _create_masters(self) -> None:
+        if self._cc.kind != "openshift":
+            logger.info(f"create masters: skip for cluster type {self._cc.kind}")
+            return
+        if not self._cc.masters:
+            logger.info("create masters: skip without masters")
+            return
+        if MASTERS_STEP not in self.steps:
+            logger.info(f"create masters: skip {MASTERS_STEP} step")
+            return
+
+        logger.info("create masters: start")
+
         cluster_name = self._cc.name
         infra_env = f"{cluster_name}-{self.masters_arch}"
         logger.info(f"Ensuring infraenv {infra_env} exists.")
@@ -363,9 +415,18 @@ class ClusterDeployer(BaseDeployer):
 
         self.update_dnsmasq()
 
-    def create_workers(self) -> None:
-        if len(self._cc.workers) == 0:
-            logger.info("No workers to setup")
+    def _create_workers(self) -> None:
+        if self._cc.kind != "openshift":
+            logger.info(f"Setting up workers: skip for cluster kind {self._cc.kind}")
+            return
+        if not self._cc.workers:
+            logger.info("Setting up workers: no worker to setup")
+            return
+        if not self._cc.masters:
+            logger.info("Setting up workers: skip without masters")
+            return
+        if WORKERS_STEP not in self.steps:
+            logger.info(f"Setting up workers: skip \"{WORKERS_STEP}\" step")
             return
         logger.info("Setting up workers")
         cluster_name = self._cc.name
