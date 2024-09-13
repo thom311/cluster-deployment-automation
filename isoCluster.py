@@ -102,10 +102,12 @@ def enable_acc_connectivity(node: NodeConfig) -> None:
     ipu_acc = host.RemoteHost(str(node.ip))
     ipu_acc.ping()
     ipu_acc.ssh_connect("root", "redhat")
-    ipu_acc.run("nmcli con mod enp0s1f0 ipv4.route-metric 0")
-    ipu_acc.run("ip route delete default via 192.168.0.1")  # remove imc default route to avoid conflict
+    if node.kind != "marvell-dpu":
+        ipu_acc.run("nmcli con mod enp0s1f0 ipv4.route-metric 0")
+        ipu_acc.run("ip route delete default via 192.168.0.1")  # remove imc default route to avoid conflict
     logger.info(f"{node.name} connectivity established")
-    ensure_ipu_netdevs_available(node)
+    if node.kind != "marvell-dpu":
+        ensure_ipu_netdevs_available(node)
 
 
 # TODO: Remove this workaround once rebooting the IMC no longer causes the netdevs on the IPU host to be removed
