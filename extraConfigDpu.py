@@ -258,10 +258,9 @@ def ExtraConfigDpuHost(cc: ClustersConfig, cfg: ExtraConfigArgs, futures: dict[s
         client.oc_run_or_die(f"label no {e.name} dpu=true")
         return None
 
-    executor = ThreadPoolExecutor(max_workers=len(cc.workers))
+    executor = ThreadPoolExecutor(max_workers=len(dpu_workers))
     f = []
-    # Assuming that all workers have a DPU
-    for e in cc.workers:
+    for e in dpu_workers:
         logger.info(f"Calling helper function for node {e.node}")
         bmc = e.create_bmc()
         h = host.Host(e.node, bmc)
