@@ -4,43 +4,107 @@ import sys
 import time
 import json
 import shutil
+from concurrent.futures import Future
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 from typing import Generator
 from typing import Union
 from typing import Callable
+from typing import Iterable
+import collections.abc
 import re
 import logging
 from assistedInstaller import AssistedClientAutomation
 import host
+from clustersConfig import ExtraConfigArgs
 from clustersConfig import ClustersConfig
 from k8sClient import K8sClient
 import common
 from python_hosts import Hosts, HostsEntry
 from logger import logger
 import microshift
+import ipu
+import isoCluster
+from extraConfigRunner import ExtraConfigRunner
 from clusterHost import ClusterHost
+from clusterNode import ClusterNode
 import dnsutil
 from virshPool import VirshPool
 from arguments import PRE_STEP, WORKERS_STEP, MASTERS_STEP, POST_STEP
 from libvirt import Libvirt
-from baseDeployer import BaseDeployer
 from ktoolbox.common import unwrap
 
 
 _BF_ISO_PATH = "/root/iso"
 
 
-class ClusterDeployer(BaseDeployer):
-    def __init__(self, cc: ClustersConfig, ai: AssistedClientAutomation, steps: list[str]):
-        super().__init__(cc, steps)
-        self._client: Optional[K8sClient] = None
-        self._ai = ai
+class ClusterDeployer:
+    _cc: ClustersConfig
+    _extra_config: ExtraConfigRunner
+    _futures: dict[str, Future[Optional[host.Result]]]
+    steps: tuple[str, ...]
+    _ai_optional: Optional[AssistedClientAutomation]
+    _client: Optional[K8sClient]
+    _local_host: ClusterHost
+    _remote_hosts: collections.abc.Mapping[str, ClusterHost]
+    _all_hosts: list[ClusterHost]
+    _all_nodes: collections.abc.Mapping[str, ClusterNode]
+    masters_arch: str
+    workers_arch: str
 
-        self._local_host = ClusterHost(host.LocalHost(), self._cc.hosts["localhost"], cc, unwrap(cc.cluster_config.local_bridge_config))
-        self._remote_hosts = {bm.name: ClusterHost(host.RemoteHost(bm.name), bm, cc, unwrap(cc.cluster_config.remote_bridge_config)) for bm in self._cc.hosts.values() if bm.name != "localhost"}
+    __slots__ = [
+        "_cc",
+        "_extra_config",
+        "_futures",
+        "steps",
+        "_ai_optional",
+        "_client",
+        "_local_host",
+        "_remote_hosts",
+        "_all_hosts",
+        "_all_nodes",
+        "masters_arch",
+        "workers_arch",
+    ]
+
+    def __init__(
+        self,
+        cc: ClustersConfig,
+        ai: Optional[AssistedClientAutomation],
+        steps: Iterable[str],
+    ):
+        self._cc = cc
+        self._extra_config = ExtraConfigRunner(cc)
+        self._futures = {}
+        self.steps = tuple(steps)
+
+        self._ai_optional = ai
+        self._client = None
+
+        self._remote_hosts = {}
+        self._all_hosts = []
+
+        self._local_host = ClusterHost(
+            host.LocalHost(),
+            self._cc.hosts["localhost"],
+            cc,
+            cc.cluster_config.local_bridge_config,
+        )
+        self._remote_hosts = {
+            bm.name: ClusterHost(
+                host.RemoteHost(bm.name),
+                bm,
+                cc,
+                cc.cluster_config.remote_bridge_config,
+            )
+            for bm in self._cc.hosts.values()
+            if bm.name != "localhost"
+        }
+
         self._all_hosts = [self._local_host] + list(self._remote_hosts.values())
+
         self._futures.update((k8s_node.config.name, k8s_node.future) for h in self._all_hosts for k8s_node in h._k8s_nodes())
+
         self._all_nodes = {k8s_node.config.name: k8s_node for h in self._all_hosts for k8s_node in h._k8s_nodes()}
 
         self.masters_arch = "x86_64"
@@ -50,6 +114,10 @@ class ClusterDeployer(BaseDeployer):
             self.workers_arch = "x86_64"
 
         self._validate()
+
+    @property
+    def _ai(self) -> AssistedClientAutomation:
+        return unwrap(self._ai_optional)
 
     def _all_hosts_with_masters(self) -> set[ClusterHost]:
         return {ch for ch in self._all_hosts if len(ch.k8s_master_nodes) > 0}
@@ -191,17 +259,18 @@ class ClusterDeployer(BaseDeployer):
         if self._cc.cluster_config.is_sno:
             logger.info("Setting up a Single Node OpenShift (SNO) environment")
 
-        min_cores = 28
-        cc = int(self._local_host.hostconn.run("nproc").out)
-        if cc < min_cores:
-            logger.error_and_exit(f"Detected {cc} cores on localhost, but need at least {min_cores} cores")
-        if self.need_external_network():
-            try:
-                self._cc.get_external_port()
-            except Exception as e:
-                logger.error_and_exit(f"Invalid external port: {e}")
-        else:
-            logger.info("Don't need external network so will not set it up")
+        if self._cc.kind in ("openshift", "microshift"):
+            min_cores = 28
+            cc = int(self._local_host.hostconn.run("nproc").out)
+            if cc < min_cores:
+                logger.error_and_exit(f"Detected {cc} cores on localhost, but need at least {min_cores} cores")
+            if self.need_external_network():
+                try:
+                    self._cc.get_external_port()
+                except Exception as e:
+                    logger.error_and_exit(f"Invalid external port: {e}")
+            else:
+                logger.info("Don't need external network so will not set it up")
 
     def _get_status(self, name: str) -> Optional[str]:
         h = self._ai.get_ai_host(name)
@@ -230,6 +299,10 @@ class ClusterDeployer(BaseDeployer):
             self._client = K8sClient(self._cc.kubeconfig)
         return self._client
 
+    def _prepost_config(self, extra_configs: Iterable[ExtraConfigArgs]) -> None:
+        for e in extra_configs:
+            self._extra_config.run(e, self._futures)
+
     def _preconfig(self) -> None:
         if not self._cc.masters:
             logger.info("preconfig step: skipping without masters")
@@ -238,16 +311,14 @@ class ClusterDeployer(BaseDeployer):
             logger.info(f"preconfig step: skip {PRE_STEP} step")
             return
         logger.info("preconfig step: start")
-        for e in self._cc.cluster_config.preconfig:
-            self._prepost_config(e)
+        self._prepost_config(self._cc.cluster_config.preconfig)
 
     def _postconfig(self) -> None:
         if POST_STEP not in self.steps:
             logger.info(f"postconfig step: skip {POST_STEP} step")
             return
         logger.info("postconfig step: start")
-        for e in self._cc.cluster_config.postconfig:
-            self._prepost_config(e)
+        self._prepost_config(self._cc.cluster_config.postconfig)
 
     def _deploy_cluster(self) -> None:
         if self._cc.kind == "microshift":
@@ -261,6 +332,26 @@ class ClusterDeployer(BaseDeployer):
                 external_port=self._cc.get_external_port(),
                 version=self._cc.cluster_config.ocp_version,
             )
+            return
+
+        if self._cc.kind == "iso":
+            if MASTERS_STEP not in self.steps:
+                logger.info(f"deploy cluster: skip {MASTERS_STEP} step")
+                return
+
+            master = self._cc.cluster_config.single_master
+
+            logger.info(f"create cluster: start iso deploy (kind {master.kind})")
+
+            if master.kind == "ipu":
+                node = ipu.IPUClusterNodeVersion(master, self._cc.get_external_port(), unwrap(self._cc.cluster_config.network_api_port))
+                executor = ThreadPoolExecutor(max_workers=len(self._cc.masters))
+                node.start(unwrap(self._cc.cluster_config.install_iso), executor)
+                node.future.result()
+            elif master.kind == "marvell-dpu":
+                isoCluster.MarvellIsoBoot(self._cc, master, unwrap(self._cc.cluster_config.install_iso))
+            else:
+                raise ValueError(f"unexpected master kind {master.kind}")
             return
 
         if self._cc.kind == "openshift":
