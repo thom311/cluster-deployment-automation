@@ -5,56 +5,14 @@ from assistedInstaller import AssistedClientAutomation
 from assistedInstallerService import AssistedInstallerService
 from clustersConfig import ClustersConfig
 from clusterDeployer import ClusterDeployer
-from isoDeployer import IsoDeployer
 from arguments import parse_args
+from typing import Optional
 import argparse
 import host
 from logger import logger
 from clusterSnapshotter import ClusterSnapshotter
 from virtualBridge import VirBridge
 from ktoolbox.common import unwrap
-
-
-def main_deploy_openshift(cc: ClustersConfig, args: argparse.Namespace) -> None:
-    # Make sure the local virtual bridge base configuration is correct.
-    local_bridge = VirBridge(host.LocalHost(), unwrap(cc.cluster_config.local_bridge_config))
-    local_bridge.configure(api_port=None)
-
-    # microshift does not use assisted installer so we don't need this check
-    if args.url == cc.real_ip_range[0]:
-        ais = AssistedInstallerService(
-            cc.version,
-            args.url,
-            cc.cluster_config.proxy,
-            cc.cluster_config.noproxy,
-        )
-        ais.start()
-    else:
-        logger.info(f"Will use Assisted Installer running at {args.url}")
-        ais = None
-
-    """
-    Here we will use the AssistedClient from the aicli package from:
-        https://github.com/karmab/aicli
-    The usage details are here:
-        https://aicli.readthedocs.io/en/latest/
-    """
-    ai = AssistedClientAutomation(f"{args.url}:8090")
-    cd = ClusterDeployer(cc, ai, args.steps)
-
-    if args.teardown or args.teardown_full:
-        cd.teardown_workers()
-        cd.teardown_masters()
-    else:
-        cd.deploy()
-
-    if args.teardown_full and ais:
-        ais.stop()
-
-
-def main_deploy_iso(cc: ClustersConfig, args: argparse.Namespace) -> None:
-    id = IsoDeployer(cc, args.steps)
-    id.deploy()
 
 
 def main_deploy(args: argparse.Namespace) -> None:
@@ -65,10 +23,44 @@ def main_deploy(args: argparse.Namespace) -> None:
     )
     cc.log_config()
 
+    ais: Optional[AssistedInstallerService] = None
+    ai: Optional[AssistedClientAutomation] = None
+
     if cc.kind == "openshift":
-        main_deploy_openshift(cc, args)
+        # Make sure the local virtual bridge base configuration is correct.
+        local_bridge = VirBridge(host.LocalHost(), unwrap(cc.cluster_config.local_bridge_config))
+        local_bridge.configure(api_port=None)
+
+        # microshift does not use assisted installer so we don't need this check
+        if args.url == cc.real_ip_range[0]:
+            ais = AssistedInstallerService(
+                cc.version,
+                args.url,
+                cc.cluster_config.proxy,
+                cc.cluster_config.noproxy,
+            )
+            ais.start()
+        else:
+            logger.info(f"Will use Assisted Installer running at {args.url}")
+
+        """
+        Here we will use the AssistedClient from the aicli package from:
+            https://github.com/karmab/aicli
+        The usage details are here:
+            https://aicli.readthedocs.io/en/latest/
+        """
+        ai = AssistedClientAutomation(f"{args.url}:8090")
+
+    cd = ClusterDeployer(cc, ai, args.steps)
+
+    if args.teardown or args.teardown_full:
+        cd.teardown_workers()
+        cd.teardown_masters()
     else:
-        main_deploy_iso(cc, args)
+        cd.deploy()
+
+    if args.teardown_full and ais:
+        ais.stop()
 
 
 def main_snapshot(args: argparse.Namespace) -> None:
