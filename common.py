@@ -588,7 +588,7 @@ def build_sriov_network_operator_check_permissions() -> bool:
     return ret.success()
 
 
-def git_repo_setup(repo_dir: str, *, repo_wipe: bool = True, url: str, branch: Optional[str] = "master") -> None:
+def git_repo_setup(repo_dir: str, *, repo_wipe: bool = True, url: str, branch: Optional[str] = None) -> None:
     exists = os.path.exists(repo_dir)
     if exists and not repo_wipe:
         return
@@ -596,7 +596,10 @@ def git_repo_setup(repo_dir: str, *, repo_wipe: bool = True, url: str, branch: O
         shutil.rmtree(repo_dir)
 
     logger.info(f"Cloning repo {url} to {repo_dir}")
-    Repo.clone_from(url, repo_dir, branch=branch)
+    kwargs: dict[str, typing.Any] = {}
+    if branch is not None:
+        kwargs["branch"] = branch
+    Repo.clone_from(url, repo_dir, **kwargs)
 
 
 def extract_version_or_panic(version: str) -> str:
