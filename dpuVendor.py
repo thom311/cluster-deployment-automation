@@ -97,14 +97,13 @@ class MarvellDpuPlugin(VendorPlugin):
         logger.warning("Setting up Marvell DPU not yet implemented")
 
 
-def init_vendor_plugin(h: host.Host, node_kind: str) -> VendorPlugin:
-    # TODO: Autodetect the vendor hardware and return the proper implementation.
-    if node_kind == "marvell-dpu":
-        logger.info(f"Detected Marvell DPU on {h.hostname()}")
+def init_vendor_plugin(h: host.Host, *, dpu_kind: str) -> VendorPlugin:
+    logger.info(f"Creating vendor plugin for dpu_kind {repr(dpu_kind)}")
+    if dpu_kind == "marvell-dpu":
         return MarvellDpuPlugin()
-    else:
-        logger.info(f"Detected Intel IPU hardware on {h.hostname()}")
+    if dpu_kind == "intel-ipu":
         return IpuPlugin(h.run("uname -m").out)
+    assert False
 
 
 def extractContainerImage(dockerfile: str) -> str:

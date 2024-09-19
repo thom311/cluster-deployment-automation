@@ -49,14 +49,15 @@ class ClusterNode:
     ) -> 'ClusterNode':
         if node_config.kind == "vm":
             return VmClusterNode(hostconn, node_config)
-        if node_config.kind == "physical":
-            if cc.kind == "iso":
+        elif node_config.kind == "physical":
+            if node_config.dpu_kind == "marvell-dpu":
+                return MarvellDpuNode(node_config)
+            elif node_config.dpu_kind == "intel-ipu":
                 return IsoClusterNode(node_config)
-            return X86ClusterNode(node_config, cc.get_external_port())
-        if node_config.kind == "bf":
+            elif node_config.dpu_kind in (None, "marvell-dpu-host", "intel-ipu-host"):
+                return X86ClusterNode(node_config, cc.get_external_port())
+        elif node_config.kind == "bf":
             return BFClusterNode(node_config, cc.get_external_port())
-        if node_config.kind == "marvell-dpu":
-            return MarvellDpuNode(node_config)
         raise ValueError(f"Cannot create ClusterNode for node kind {repr(node_config.kind)}")
 
     def ip(self) -> str:

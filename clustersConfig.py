@@ -329,6 +329,10 @@ class ExtraConfigArgs(kcommon.StructParseBaseNamed):
                 )
 
 
+VALID_DPU_KIND_DPU = ("marvell-dpu", "intel-ipu")
+VALID_DPU_KIND_HOST = ("marvell-dpu-host", "intel-ipu-host")
+
+
 @kcommon.strict_dataclass
 @dataclass(frozen=True, kw_only=True)
 class NodeConfig(kcommon.StructParseBaseNamed):
@@ -346,6 +350,7 @@ class NodeConfig(kcommon.StructParseBaseNamed):
     disk_size: Optional[int]
     ram: Optional[int]
     cpu: Optional[int]
+    dpu_kind: Optional[str]
 
     @property
     def mac(self) -> str:
@@ -367,6 +372,7 @@ class NodeConfig(kcommon.StructParseBaseNamed):
 
     def serialize(self) -> dict[str, Any]:
         extra_1: dict[str, Any] = {}
+        kcommon.dict_add_optional(extra_1, "dpu_kind", self.dpu_kind)
         kcommon.dict_add_optional(extra_1, "ip", self.ip)
         kcommon.dict_add_optional(extra_1, "mac", self.mac_explicit)
         extra_2: dict[str, Any] = {}
@@ -420,10 +426,25 @@ class NodeConfig(kcommon.StructParseBaseNamed):
                     kind_property = "type"
             else:
                 if kind is None:
-                    raise ValueError(f"\"{yamlpath}.kind\": mandatory value missing")
-            valid_kinds = ("physical", "vm", "bf", "marvell-dpu")
+                    if "dpu_kind" in varg.vdict:
+                        kind = "physical"
+                    else:
+                        raise ValueError(f"\"{yamlpath}.kind\": mandatory value missing")
+            valid_kinds = ("physical", "vm", "bf")
             if kind not in valid_kinds:
                 raise ValueError(f"\"{yamlpath}.{kind_property}\": invalid value {repr(kind)} (must be one of {repr(valid_kinds)})")
+
+            dpu_kind = kcommon.structparse_pop_str(
+                *varg.for_key("dpu_kind"),
+                default=None,
+            )
+            if dpu_kind is not None:
+                valid_dpu_kinds = VALID_DPU_KIND_DPU + VALID_DPU_KIND_HOST
+                if dpu_kind not in valid_dpu_kinds:
+                    raise ValueError(f"\"{yamlpath}.dpu_kind\": invalid value {repr(dpu_kind)} (must be one of {repr(list(valid_dpu_kinds))} or missing)")
+
+                if kind != "physical":
+                    raise ValueError(f"\"{yamlpath}.dpu_kind\": dpu kind {repr(dpu_kind)} requires node kind \"physical\" but got \"{repr(kind)}")
 
             node = kcommon.structparse_pop_str(
                 *varg.for_key("node"),
@@ -471,8 +492,9 @@ class NodeConfig(kcommon.StructParseBaseNamed):
                 default="calvin" if bmc_user is not None else None,
             )
 
+            with_bmc = kind == "bf" or (kind == "physical" and dpu_kind not in VALID_DPU_KIND_DPU)
             if bmc is None:
-                if kind in ("phyisical", "bf"):
+                if with_bmc:
                     raise ValueError(f"\"{yamlpath}.bmc\": BMC is mandatory for kind {kind}")
 
                 # We allow the YAML to contain "bmc_user" and "bmc_password". However,
@@ -536,8 +558,10 @@ class NodeConfig(kcommon.StructParseBaseNamed):
             )
 
         if ip is None:
-            if kind in ("vm", "marvell-dpu"):
+            if kind in ("vm",):
                 raise ValueError(f"\"{yamlpath}.ip\": mandatory for node of kind {repr(kind)}")
+            if dpu_kind in ("marvell-dpu",):
+                raise ValueError(f"\"{yamlpath}.ip\": mandatory for node of dpu_kind {repr(dpu_kind)}")
 
         if kind != "vm":
             # Those value are normalized away unless for VM.
@@ -553,6 +577,7 @@ class NodeConfig(kcommon.StructParseBaseNamed):
             name=name,
             node=node,
             kind=kind,
+            dpu_kind=dpu_kind,
             mac_explicit=mac_explicit,
             mac_random=mac_random,
             image_path=image_path,
@@ -941,8 +966,10 @@ class ClusterConfig(kcommon.StructParseBaseNamed):
                 raise ValueError(f"\"{yamlpath}.network_api_port\": mandatory parameter missing for kind {kind}")
 
             master = next(iter(masters.values()))
-            if master.kind not in ("physical", "marvell-dpu"):
+            if master.kind not in ("physical",):
                 raise ValueError(f"\"{master.yamlpath}.kind\": for a cluster kind {repr(kind)} the master has an unexpected kind {master.kind}")
+            if master.dpu_kind not in VALID_DPU_KIND_DPU:
+                raise ValueError(f"\"{master.yamlpath}.dpu_kind\": for a cluster kind {repr(kind)} the master has an unexpected dpu_kind {master.dpu_kind}")
             if master.mac_explicit is None:
                 raise ValueError(f"\"{master.yamlpath}.mac\": for a cluster kind {repr(kind)} the master must have a MAC address configured")
             if master.ip is None:
@@ -954,6 +981,9 @@ class ClusterConfig(kcommon.StructParseBaseNamed):
         if kind == "microshift":
             if len(masters) > 1:
                 raise ValueError(f"\"{yamlpath}.masters\": only one master allowed with kind {repr(kind)}")
+
+        def _has_dpu_node() -> bool:
+            return any(n.dpu_kind in VALID_DPU_KIND_DPU for n in masters.values())
 
         is_allowed_for_preconfig = {"bf_bfb_image"}
         is_allowed_for_postconfig = set(ExtraConfigArgs.get_extra_configs()) - is_allowed_for_preconfig
@@ -978,6 +1008,12 @@ class ClusterConfig(kcommon.StructParseBaseNamed):
             else:
                 if extra_config.name not in is_allowed_for_postconfig:
                     raise ValueError(f"\"{extra_config.yamlpath}\": the {extra_config.config_type} {repr(extra_config.name)} only works as \"preconfig\" step")
+            if extra_config.config_type == "dpu_operator_dpu":
+                if not any(n.dpu_kind in VALID_DPU_KIND_DPU for n in masters.values()):
+                    raise ValueError(f"\"{extra_config.yamlpath}\": {extra_config.config_type} {repr(extra_config.name)} requires a master with dpu_kind set to one of {repr(list(VALID_DPU_KIND_DPU))}")
+            if extra_config.config_type == "dpu_operator_host":
+                if not any(n.dpu_kind in VALID_DPU_KIND_HOST for n in workers.values()):
+                    raise ValueError(f"\"{extra_config.yamlpath}\": {extra_config.config_type} {repr(extra_config.name)} requires a master with dpu_kind set to one of {repr(list(VALID_DPU_KIND_HOST))}")
             extra_config_dup = kcommon.iter_get_first(c for c in pconfigs if c.name == extra_config.name and c.config_type == extra_config.config_type and c is not extra_config)
             if extra_config_dup is not None:
                 raise ValueError(f"\"{extra_config_dup.yamlpath}\": the {extra_config.config_type} {repr(extra_config_dup.name)} is listed twice (\"{extra_config.yamlpath}\")")
