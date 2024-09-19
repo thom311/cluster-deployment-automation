@@ -163,6 +163,7 @@ def check_test5(tfile: TFileConfig, cc: clustersConfig.ClustersConfig) -> None:
         name="mycluster-master-1",
         kind="vm",
         node="localhost",
+        dpu_kind=None,
         ip="192.168.122.41",
         mac_explicit=None,
         mac_random=cc.masters[0].mac_random,

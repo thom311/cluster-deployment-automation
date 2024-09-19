@@ -167,7 +167,7 @@ def ExtraConfigDpu(cc: ClustersConfig, cfg: ExtraConfigArgs, futures: dict[str, 
     acc.run("systemctl disable firewalld")
 
     # Build and start vsp on DPU
-    vendor_plugin = init_vendor_plugin(acc, dpu_node.kind)
+    vendor_plugin = init_vendor_plugin(acc, dpu_kind=unwrap(dpu_node.dpu_kind))
     if isinstance(vendor_plugin, IpuPlugin):
         # TODO: Remove when this container is properly started by the vsp
         # We need to manually start the p4 sdk container currently for the IPU plugin
@@ -229,7 +229,7 @@ def ExtraConfigDpuHost(cc: ClustersConfig, cfg: ExtraConfigArgs, futures: dict[s
     node = cc.workers[0]
     h = host.Host(node.node)
     h.ssh_connect("core")
-    vendor_plugin = init_vendor_plugin(h, node.kind)
+    vendor_plugin = init_vendor_plugin(h, dpu_kind=unwrap(node.dpu_kind))
     if isinstance(vendor_plugin, IpuPlugin):
         vendor_plugin.build_push(lh, imgReg)
     else:

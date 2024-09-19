@@ -72,9 +72,9 @@ def configure_iso_network_port(api_port: str, node_ip: str) -> None:
 
 def enable_acc_connectivity(node: NodeConfig) -> None:
     logger.info(f"Establishing connectivity to {node.name}")
-    if node.kind == "marvell-dpu":
+    if node.dpu_kind == "marvell-dpu":
         pass
-    else:
+    elif node.dpu_kind == "intel-ipu":
         ipu_imc = node.create_rhost_bmc()
 
         # """
@@ -98,6 +98,8 @@ def enable_acc_connectivity(node: NodeConfig) -> None:
             time.sleep(15)
         else:
             logger.error_and_exit("Failed to enable ACC connectivity")
+    else:
+        assert False
 
     ipu_acc = host.RemoteHost(str(node.ip))
     ipu_acc.ping()
@@ -242,14 +244,16 @@ def IPUIsoBoot(
     network_api_port: str,
     get_external_port: typing.Callable[[], str],
 ) -> None:
-    if node.kind == "marvell-dpu":
+    if node.dpu_kind == "marvell-dpu":
         _pxeboot_marvell_dpu(node.name, node.node, node.mac, unwrap(node.ip), iso)
-    else:
+    elif node.dpu_kind == "intel-ipu":
         _redfish_boot_ipu(
             node=node,
             iso=iso,
             get_external_port=get_external_port,
         )
+    else:
+        assert False
     configure_iso_network_port(network_api_port, unwrap(node.ip))
     configure_dhcpd(node)
     enable_acc_connectivity(node)
