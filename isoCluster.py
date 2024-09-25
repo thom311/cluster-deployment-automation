@@ -12,6 +12,11 @@ def _pxeboot_marvell_dpu(name: str, node: str, mac: str, ip: str, iso: str) -> N
     rsh = host.RemoteHost(node)
     rsh.ssh_connect("core")
 
+    if os.path.exists(iso):
+        dst_file = f"/tmp/cda-iso-{os.path.basename(iso).removesuffix('.iso')}.iso"
+        rsh.copy_to(iso, dst_file)
+        iso = f"/host{dst_file}"
+
     ip_addr = f"{ip}/24"
     ip_gateway, _ = dhcpConfig.get_subnet_range(ip, "255.255.255.0")
 
