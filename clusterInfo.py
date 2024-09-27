@@ -1,27 +1,30 @@
+import dataclasses
+import json
 import os
 import gspread
 import typing
 import threading
 from oauth2client.service_account import ServiceAccountCredentials
 from logger import logger
+import ktoolbox.common as kcommon
 
 
 SHEET = "ANL lab HW enablement clusters and connections"
 URL = "https://docs.google.com/spreadsheets/d/1lXvcodJ8dmc_hcp0hzbPDU8t6-hCnA"
 
 
+@dataclasses.dataclass(kw_only=True)
 class ClusterInfo:
-    def __init__(self, name: str):
-        self.name = name
-        self.provision_host = ""
-        self.network_api_port = ""
-        self.iso_server = ""
-        self.organization_id = ""
-        self.activation_key = ""
-        self.bmc_imc_hostnames = []  # type: list[str]
-        self.ipu_mac_addresses = []  # type: list[str]
-        self.workers = []  # type: list[str]
-        self.bmcs = []  # type: list[str]
+    name: str
+    provision_host: str = ""
+    network_api_port: str = ""
+    iso_server: str = ""
+    organization_id: str = ""
+    activation_key: str = ""
+    bmc_imc_hostnames: list[str] = dataclasses.field(default_factory=list)
+    ipu_mac_addresses: list[str] = dataclasses.field(default_factory=list)
+    workers: list[str] = dataclasses.field(default_factory=list)
+    bmcs: list[str] = dataclasses.field(default_factory=list)
 
 
 def read_sheet() -> list[dict[str, str]]:
@@ -56,7 +59,7 @@ def load_all_cluster_info() -> dict[str, ClusterInfo]:
         if row["Name"].startswith("Cluster"):
             if cluster is not None:
                 ret.append(cluster)
-            cluster = ClusterInfo(row["Name"])
+            cluster = ClusterInfo(name=row["Name"])
         if cluster is None:
             continue
         if "BF2" in row["Name"]:
@@ -108,7 +111,8 @@ class ClusterInfoLoader:
         with self._lock:
             if self._all_cluster_info is None:
                 self._all_cluster_info = load_all_cluster_info()
-                logger.debug(f"all-cluster-info: {repr(self._all_cluster_info)}")
+                vdict = {k: kcommon.dataclass_to_dict(ci) for k, ci in self._all_cluster_info.items()}
+                logger.debug(f"all-cluster-info: {json.dumps(vdict)}")
             return self._all_cluster_info
 
     @typing.overload
