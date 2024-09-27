@@ -6,6 +6,9 @@ from oauth2client.service_account import ServiceAccountCredentials
 from logger import logger
 
 
+ENV_CDA_CLUSTERINFO_CREDENTIALS = "CDA_CLUSTERINFO_CREDENTIALS"
+
+
 class ClusterInfo:
     def __init__(self, name: str):
         self.name = name
@@ -20,8 +23,12 @@ class ClusterInfo:
         self.bmcs = []  # type: list[str]
 
 
-def _default_cred_paths() -> list[str]:
+def _default_cred_paths(*, honor_env: bool = True) -> list[str]:
     paths = []
+    if honor_env:
+        p = os.environ.get(ENV_CDA_CLUSTERINFO_CREDENTIALS, None)
+        if p:
+            paths.append(p)
     cwd = os.getcwd()
     if cwd:
         paths.append(os.path.join(cwd, "credentials.json"))
