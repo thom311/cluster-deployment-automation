@@ -14,6 +14,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 from logger import logger
 import common
 import json
+import ktoolbox.common as kcommon
 
 
 ENV_CDA_CLUSTERINFO_CREDENTIALS = "CDA_CLUSTERINFO_CREDENTIALS"
@@ -279,7 +280,8 @@ class ClusterInfoLoader:
         with self._lock:
             if self._all_cluster_info is None:
                 self._all_cluster_info = load_all_cluster_info()
-                logger.debug(f"all-cluster-info: {repr(self._all_cluster_info)}")
+                vdict = {k: kcommon.dataclass_to_dict(ci) for k, ci in self._all_cluster_info.items()}
+                logger.debug(f"all-cluster-info: {json.dumps(vdict)}")
             self._is_loaded = True
             return self._all_cluster_info
 
