@@ -1233,6 +1233,7 @@ class MainConfig(kcommon.StructParseBase):
     yamlfile: str
 
     clusters: tuple[ClusterConfig, ...]
+    current_host: Optional[str]
 
     def __post_init__(self) -> None:
         for c in self.clusters:
@@ -1257,6 +1258,7 @@ class MainConfig(kcommon.StructParseBase):
         yamlfile: str,
         basedir: Optional[str] = None,
         rnd_seed: Optional[str] = None,
+        current_host: Optional[str] = None,
     ) -> "MainConfig":
         yamlfile = os.path.normpath(os.path.abspath(yamlfile))
         if basedir is None:
@@ -1278,6 +1280,7 @@ class MainConfig(kcommon.StructParseBase):
             yamlpath=pctx.yamlpath,
             yamlfile=yamlfile,
             clusters=clusters,
+            current_host=current_host,
         )
 
     @staticmethod
@@ -1286,11 +1289,13 @@ class MainConfig(kcommon.StructParseBase):
         *,
         cluster_name: Optional[str],
         cluster_info_loader: Optional[clusterInfo.ClusterInfoLoader] = None,
-    ) -> str:
-        if cluster_info_loader is None:
-            cluster_info_loader = clusterInfo.ClusterInfoLoader()
+        current_host: Optional[str] = None,
+    ) -> tuple[str, Optional[str]]:
 
-        ci = cluster_info_loader
+        ci = clusterInfo.ClusterInfoLoader(
+            current_host=cluster_name,
+            delegate_loader=cluster_info_loader,
+        )
 
         template = jinja2.Template(contents)
 
@@ -1309,7 +1314,7 @@ class MainConfig(kcommon.StructParseBase):
 
         result: str = template.render(**kwargs)
 
-        return result
+        return result, ci.current_host if ci.is_loaded else None
 
     @staticmethod
     def load(
@@ -1319,6 +1324,7 @@ class MainConfig(kcommon.StructParseBase):
         cluster_info_loader: Optional[clusterInfo.ClusterInfoLoader] = None,
         basedir: Optional[str] = None,
         rnd_seed: Optional[str] = None,
+        current_host: Optional[str] = None,
     ) -> 'MainConfig':
         if not os.path.exists(filename):
             raise ValueError(f"Missing YAML configuration at {repr(filename)}")
@@ -1334,16 +1340,19 @@ class MainConfig(kcommon.StructParseBase):
         except Exception as e:
             raise ValueError(f"Error reading YAML file {repr(filename)}{' before Jinja2 templating' if with_jinja else ''}: {e}")
 
+        effective_current_host: Optional[str] = None
+
         if with_jinja:
             try:
                 cluster_name = yamldata["clusters"][0]["name"]
             except Exception:
                 cluster_name = None
 
-            contents = MainConfig._apply_jinja(
+            contents, effective_current_host = MainConfig._apply_jinja(
                 contents,
                 cluster_name=cluster_name,
                 cluster_info_loader=cluster_info_loader,
+                current_host=current_host,
             )
 
             try:
@@ -1367,6 +1376,7 @@ class MainConfig(kcommon.StructParseBase):
                 yamlfile=filename,
                 basedir=basedir,
                 rnd_seed=rnd_seed,
+                current_host=effective_current_host,
             )
         except Exception as e:
             raise ValueError(f"Error loading YAML file {repr(filename)}: {e}")
@@ -1411,6 +1421,7 @@ class ClustersConfig:
         basedir: Optional[str] = None,
         rnd_seed: Optional[str] = None,
         with_system_check: bool = True,
+        current_host: Optional[str] = None,
     ):
         if secrets_path is None:
             d = basedir if basedir is not None else os.getcwd()
@@ -1426,6 +1437,7 @@ class ClustersConfig:
             yaml_path,
             basedir=basedir,
             rnd_seed=rnd_seed,
+            current_host=current_host,
         )
 
         self.main_config._owner_reference.init(self)
@@ -1566,6 +1578,7 @@ def main() -> None:
     parser.add_argument('--system-check', dest='with_system_check', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--cluster-index', default=0, type=int, help="A configuration can contain multiple clusters. This is the index which one to load")
     parser.add_argument('--secret', dest='secrets_path', default=None, action='store', type=str, help='pull_secret.json path (default is in cwd)')
+    parser.add_argument("-H", '--current-host', dest='current_host', default=None, action='store', type=str, help=f'The hostname for applying the jinja template from {repr(clusterInfo.SHEET)}. Defaults to `hostname -f`')
     parser.add_argument('-v', "--verbose", action='store_true', help='Enable debug logs')
     parser.add_argument("--show-secrets", action='store_true', help='Show secrets that would be hidden otherwise')
     parser.add_argument('filenames', nargs='+', help="List of filenames")
@@ -1584,6 +1597,7 @@ def main() -> None:
             with_system_check=False,
             cluster_index=args.cluster_index,
             secrets_path=args.secrets_path,
+            current_host=args.current_host,
         )
         cc.log_config(
             log_level=logging.INFO,
@@ -1598,6 +1612,8 @@ def main() -> None:
         print(f"# ip_range: {cc.cluster_config.real_ip_range}")
         print(f"# local_bridge_config: {cc.cluster_config.local_bridge_config}")
         print(f"# remote_bridge_config: {cc.cluster_config.remote_bridge_config}")
+        if cc.main_config.current_host is not None:
+            print(f"# current_host: {cc.main_config.current_host}")
         print(
             yaml.dump(
                 cc.main_config.serialize(show_secrets=args.show_secrets),
