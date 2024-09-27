@@ -24,11 +24,16 @@ class ClusterInfo:
 def read_sheet() -> list[dict[str, str]]:
     logger.info("Downloading sheet from Google")
     scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-    cred_paths = [os.path.join(os.getcwd(), "credentials.json"), os.path.join(os.environ["HOME"], "credentials.json")]
+    cred_paths = [
+        os.path.join(os.getcwd(), "credentials.json"),
+        os.path.join(os.environ["HOME"], "credentials.json"),
+        os.path.join(os.environ["HOME"], ".config/gspread/credentials.json"),
+    ]
     cred_path = None
     for e in cred_paths:
         if os.path.exists(e):
             cred_path = e
+            break
     if cred_path is None:
         logger.info("Missing credentials.json while using templated config file")
         sys.exit(-1)
