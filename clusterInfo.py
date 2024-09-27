@@ -14,6 +14,8 @@ import common
 import json
 
 
+ENV_CDA_CLUSTERINFO_CREDENTIALS = "CDA_CLUSTERINFO_CREDENTIALS"
+
 SHEET = "ANL lab HW enablement clusters and connections"
 URL = "https://docs.google.com/spreadsheets/d/1lXvcodJ8dmc_hcp0hzbPDU8t6-hCnAlEWFRdM2r_n0Q"
 SCOPES = ("https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive")
@@ -37,8 +39,12 @@ class ClusterInfo:
         return dataclasses.asdict(self)
 
 
-def _default_cred_paths() -> list[str]:
+def _default_cred_paths(*, honor_env: bool = True) -> list[str]:
     paths = []
+    if honor_env:
+        p = os.environ.get(ENV_CDA_CLUSTERINFO_CREDENTIALS, None)
+        if p:
+            paths.append(p)
     cwd = os.getcwd()
     if cwd:
         paths.append(os.path.join(cwd, "credentials.json"))
@@ -259,6 +265,8 @@ def _main_parse_args() -> argparse.Namespace:
         except re.error as e:
             raise argparse.ArgumentTypeError(f"Invalid regex pattern: {e}")
 
+    cred_str1 = os.environ.get(ENV_CDA_CLUSTERINFO_CREDENTIALS, None)
+    cred_str = f"{repr(cred_str1)}" if cred_str1 is not None else "unset"
     parser = argparse.ArgumentParser(description=f"Load Cluster Info {repr(SHEET)} from {repr(URL)}")
     parser.add_argument(
         "mode",
@@ -283,7 +291,7 @@ def _main_parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--credential",
         default=None,
-        help=f"The credential file to access the google doc. Defaults to {repr(_default_cred_paths())}. See https://docs.gspread.org/en/latest/oauth2.html#for-bots-using-service-account and share the sheet.",
+        help=f"The credential file to access the google doc. Defaults to \"$CDA_CLUSTERINFO_CREDENTIALS\" ({cred_str}) or {repr(_default_cred_paths(honor_env=False))}. See https://docs.gspread.org/en/latest/oauth2.html#for-bots-using-service-account and share the sheet.",
     )
     parser.add_argument(
         "--no-validate",
