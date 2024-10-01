@@ -159,6 +159,7 @@ class ExtraConfigArgs(kcommon.StructParseBaseNamed):
         arg: Any,
         *,
         config_type: str,
+        has_any_worker_ipu: bool,
     ) -> "ExtraConfigArgs":
         with kcommon.structparse_with_strdict(arg, yamlpath) as varg:
 
@@ -309,7 +310,7 @@ class ExtraConfigArgs(kcommon.StructParseBaseNamed):
             )
             is_valid = name == "dpu_operator_host"
             if dpu_net_interface is None:
-                if is_valid:
+                if has_any_worker_ipu and is_valid:
                     dpu_net_interface = "ens2f0"
             else:
                 if not is_valid:
@@ -317,6 +318,10 @@ class ExtraConfigArgs(kcommon.StructParseBaseNamed):
                 dpu_net_interface2 = knetdev.validate_ifname_or_none(dpu_net_interface)
                 if dpu_net_interface2 is None:
                     raise ValueError(f'"{yamlpath}.dpu_net_interface": {repr(dpu_net_interface)} is not a valid interface name')
+                if not has_any_worker_ipu:
+                    # This property only makes sense with "ipu" workers.
+                    # Silently normalize the value away.
+                    dpu_net_interface = None
 
             ipu_plugin_sha = kcommon.structparse_pop_str(
                 *varg.for_key("ipu_plugin_sha"),
@@ -383,6 +388,8 @@ class NodeConfig(kcommon.StructParseBaseNamed):
     disk_size: Optional[int]
     ram: Optional[int]
     cpu: Optional[int]
+
+    VALID_NODE_KIND_DPU: typing.ClassVar[tuple[str, ...]] = ("marvell-dpu", "ipu")
 
     @property
     def mac(self) -> str:
@@ -899,6 +906,8 @@ class ClusterConfig(kcommon.StructParseBaseNamed):
                 default_network_api_port=network_api_port,
             )
 
+            has_any_worker_ipu = any(n for n in workers.values() if n.kind == "ipu")
+
             preconfig = kcommon.structparse_pop_objlist(
                 *varg.for_key("preconfig"),
                 construct=lambda yamlpath2, yamlidx2, arg2: ExtraConfigArgs.parse(
@@ -906,6 +915,7 @@ class ClusterConfig(kcommon.StructParseBaseNamed):
                     yamlidx2,
                     arg2,
                     config_type="preconfig",
+                    has_any_worker_ipu=has_any_worker_ipu,
                 ),
             )
 
@@ -916,6 +926,7 @@ class ClusterConfig(kcommon.StructParseBaseNamed):
                     yamlidx2,
                     arg2,
                     config_type="postconfig",
+                    has_any_worker_ipu=has_any_worker_ipu,
                 ),
             )
 
@@ -968,10 +979,15 @@ class ClusterConfig(kcommon.StructParseBaseNamed):
                 raise ValueError(f"\"{yamlpath}.network_api_port\": mandatory parameter missing for kind {kind}")
 
             master = next(iter(masters.values()))
-            if master.kind not in ("physical", "marvell-dpu"):
-                raise ValueError(f"\"{master.yamlpath}.kind\": for a cluster kind {repr(kind)} the master has an unexpected kind {repr(master.kind)}")
+            if master.kind not in NodeConfig.VALID_NODE_KIND_DPU:
+                raise ValueError(f"\"{master.yamlpath}.kind\": for a cluster kind {repr(kind)} the master has an unexpected node kind {repr(master.kind)} but requires one of {repr(list(NodeConfig.VALID_NODE_KIND_DPU))}")
             if master.mac_explicit is None:
-                raise ValueError(f"\"{master.yamlpath}.mac\": for a cluster kind {repr(kind)} the master must have a MAC address configured")
+                if master.kind == "marvell-dpu":
+                    # The marvell-dpu doesn't have a stable MAC address. We have a
+                    # generated "master.mac_random" which is good enough for us.
+                    pass
+                else:
+                    raise ValueError(f"\"{master.yamlpath}.mac\": for a cluster kind {repr(kind)} the master must have a MAC address configured")
             if master.ip is None:
                 raise ValueError(f"\"{master.yamlpath}.ip\": for a cluster kind {repr(kind)} the master must have an IP address set")
         else:
@@ -999,6 +1015,18 @@ class ClusterConfig(kcommon.StructParseBaseNamed):
             if extra_config.name in ("microshift", "rh_subscription", "dpu_operator_dpu"):
                 if kind != "iso":
                     raise ValueError(f"\"{extra_config.yamlpath}\": the {extra_config.config_type} {repr(extra_config.name)} only works with cluster kind \"iso\" but got {repr(kind)}")
+            if extra_config.name == "dpu_operator_dpu":
+                if not any(n.kind in NodeConfig.VALID_NODE_KIND_DPU for n in masters.values()):
+                    raise ValueError(f"\"{extra_config.yamlpath}\": {extra_config.config_type} {repr(extra_config.name)} requires a master with node kind set to one of {repr(list(NodeConfig.VALID_NODE_KIND_DPU))}")
+            if extra_config.name == "dpu_operator_host":
+                nodes = [n for n in workers.values() if n.kind in NodeConfig.VALID_NODE_KIND_DPU]
+                if not nodes:
+                    raise ValueError(f"\"{extra_config.yamlpath}\": {extra_config.config_type} {repr(extra_config.name)} requires a worker with node kind set to one of {repr(list(NodeConfig.VALID_NODE_KIND_DPU))}")
+                for n in nodes[1:]:
+                    if n.kind != nodes[0].kind:
+                        raise ValueError(
+                            f"\"{extra_config.yamlpath}\": {extra_config.config_type} {repr(extra_config.name)} requires that all DPU worker nodes have the same node kind but \"{nodes[0].yamlpath}\" has kind {repr(nodes[0].kind)} and \"{n.yamlpath}\" has kind {repr(n.kind)}"
+                        )
             if extra_config.config_type == "preconfig":
                 if extra_config.name not in is_allowed_for_preconfig:
                     raise ValueError(f"\"{extra_config.yamlpath}\": the {extra_config.config_type} {repr(extra_config.name)} only works as \"postconfig\" step")
