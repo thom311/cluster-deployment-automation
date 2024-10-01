@@ -186,6 +186,7 @@ class ExtraConfigArgs(ClusterConfigStructParseBase):
         pctx: StructParseParseContext,
         *,
         config_type: str,
+        has_any_worker_ipu: bool,
     ) -> "ExtraConfigArgs":
         with pctx.with_strdict() as varg:
 
@@ -313,13 +314,17 @@ class ExtraConfigArgs(ClusterConfigStructParseBase):
             is_valid = name in ("dpu_operator_host",)
             dpu_net_interface = kcommon.structparse_pop_str(
                 varg.for_key("dpu_net_interface"),
-                default="ens2f0" if is_valid else None,
+                default="ens2f0" if has_any_worker_ipu and is_valid else None,
                 check_ctx=_check_ctx_is_valid_for_name(is_valid),
             )
             if dpu_net_interface is not None:
                 val_valid, dpu_net_interface = _normalize_ifname(dpu_net_interface)
                 if not val_valid:
                     raise pctx.value_error(f"{repr(dpu_net_interface)} is not a valid interface name", key="dpu_net_interface")
+                if not has_any_worker_ipu:
+                    # This property only makes sense with "ipu" workers.
+                    # Silently normalize the value away.
+                    dpu_net_interface = None
 
             is_valid = name in ("mev_firmware_up",)
             mev_version = kcommon.structparse_pop_str(
@@ -425,6 +430,8 @@ class NodeConfig(ClusterConfigStructParseBase):
     disk_size: Optional[int]
     ram: Optional[int]
     cpu: Optional[int]
+
+    VALID_NODE_KIND_DPU: typing.ClassVar[tuple[str, ...]] = ("marvell-dpu", "ipu")
 
     @property
     def mac(self) -> str:
@@ -546,6 +553,15 @@ class NodeConfig(ClusterConfigStructParseBase):
                 varg.for_key("host_side_bmc"),
                 default=None,
             )
+            is_valid = kind in ("ipu",) and cluster_kind in ("iso",)
+            if host_side_bmc is None:
+                if is_valid:
+                    raise pctx.value_error(f"value is mandatory for node kind {repr(kind)}", key="host_side_bmc")
+            else:
+                if not is_valid:
+                    if cluster_kind not in ("iso",):
+                        raise pctx.value_error(f"value is only allowed with cluster kind 'iso' but cluster kind is {repr(cluster_kind)}", key="host_side_bmc")
+                    raise pctx.value_error(f"value is only allowed with node kind 'ipu' but node kind is {repr(kind)}", key="host_side_bmc")
 
             ip = kcommon.structparse_pop_str(
                 varg.for_key("ip"),
@@ -940,11 +956,14 @@ class ClusterConfig(kcommon.StructParseBaseNamed):
                 default_network_api_port=network_api_port,
             )
 
+            has_any_worker_ipu = any(n for n in workers.values() if n.kind == "ipu")
+
             preconfig = kcommon.structparse_pop_objlist(
                 varg.for_key("preconfig"),
                 construct=lambda pctx2: ExtraConfigArgs.parse(
                     pctx2,
                     config_type="preconfig",
+                    has_any_worker_ipu=has_any_worker_ipu,
                 ),
             )
 
@@ -953,6 +972,7 @@ class ClusterConfig(kcommon.StructParseBaseNamed):
                 construct=lambda pctx2: ExtraConfigArgs.parse(
                     pctx2,
                     config_type="postconfig",
+                    has_any_worker_ipu=has_any_worker_ipu,
                 ),
             )
 
@@ -1005,10 +1025,15 @@ class ClusterConfig(kcommon.StructParseBaseNamed):
                 raise pctx.value_error(f"mandatory parameter missing for kind {kind}", key="network_api_port")
 
             master = next(iter(masters.values()))
-            if master.kind not in ("physical", "marvell-dpu"):
-                raise ValueError(f"\"{master.yamlpath}.kind\": for a cluster kind {repr(kind)} the master has an unexpected kind {repr(master.kind)}")
+            if master.kind not in NodeConfig.VALID_NODE_KIND_DPU:
+                raise ValueError(f"\"{master.yamlpath}.kind\": for a cluster kind {repr(kind)} the master has an unexpected node kind {repr(master.kind)} but requires one of {repr(list(NodeConfig.VALID_NODE_KIND_DPU))}")
             if master.mac_explicit is None:
-                raise ValueError(f"\"{master.yamlpath}.mac\": for a cluster kind {repr(kind)} the master must have a MAC address configured")
+                if master.kind == "marvell-dpu":
+                    # The marvell-dpu doesn't have a stable MAC address. We have a
+                    # generated "master.mac_random" which is good enough for us.
+                    pass
+                else:
+                    raise ValueError(f"\"{master.yamlpath}.mac\": for a cluster kind {repr(kind)} the master must have a MAC address configured")
             if master.ip is None:
                 raise ValueError(f"\"{master.yamlpath}.ip\": for a cluster kind {repr(kind)} the master must have an IP address set")
         else:
@@ -1036,6 +1061,18 @@ class ClusterConfig(kcommon.StructParseBaseNamed):
             if extra_config.name in ("microshift", "rh_subscription", "dpu_operator_dpu"):
                 if kind != "iso":
                     raise ValueError(f"\"{extra_config.yamlpath}\": the {extra_config.config_type} {repr(extra_config.name)} only works with cluster kind \"iso\" but got {repr(kind)}")
+            if extra_config.name == "dpu_operator_dpu":
+                if not any(n.kind in NodeConfig.VALID_NODE_KIND_DPU for n in masters.values()):
+                    raise ValueError(f"\"{extra_config.yamlpath}\": {extra_config.config_type} {repr(extra_config.name)} requires a master with node kind set to one of {repr(list(NodeConfig.VALID_NODE_KIND_DPU))}")
+            if extra_config.name == "dpu_operator_host":
+                nodes = [n for n in workers.values() if n.kind in NodeConfig.VALID_NODE_KIND_DPU]
+                if not nodes:
+                    raise ValueError(f"\"{extra_config.yamlpath}\": {extra_config.config_type} {repr(extra_config.name)} requires a worker with node kind set to one of {repr(list(NodeConfig.VALID_NODE_KIND_DPU))}")
+                for n in nodes[1:]:
+                    if n.kind != nodes[0].kind:
+                        raise ValueError(
+                            f"\"{extra_config.yamlpath}\": {extra_config.config_type} {repr(extra_config.name)} requires that all DPU worker nodes have the same node kind but \"{nodes[0].yamlpath}\" has kind {repr(nodes[0].kind)} and \"{n.yamlpath}\" has kind {repr(n.kind)}"
+                        )
             if extra_config.config_type == "preconfig":
                 if extra_config.name not in is_allowed_for_preconfig:
                     raise ValueError(f"\"{extra_config.yamlpath}\": the {extra_config.config_type} {repr(extra_config.name)} only works as \"postconfig\" step")
