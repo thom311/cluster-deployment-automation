@@ -18,7 +18,7 @@ clusters:
       ip: "192.168.122.43"
     workers:
     - name: "mycluster-worker-1"
-      kind: "physical"
+      kind: "ipu"
       node: "..."
       bmc_user: "root"
       bmc_password: "..."
