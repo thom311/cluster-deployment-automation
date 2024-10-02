@@ -4,6 +4,7 @@ import logging
 import threading
 import re
 import functools
+import typing
 from typing import Optional
 import jinja2
 from yaml import safe_load
@@ -1173,6 +1174,7 @@ class ClusterConfig(kcommon.StructParseBaseNamed):
 class MainConfig(kcommon.StructParseBase):
     clusters: tuple[ClusterConfig, ...]
     current_host: Optional[str]
+    file_banner: Optional[tuple[str, ...]]
 
     def serialize(self, *, show_secrets: bool = False) -> dict[str, Any]:
         return {
@@ -1191,6 +1193,7 @@ class MainConfig(kcommon.StructParseBase):
         basedir: Optional[str] = None,
         rnd_seed: Optional[str] = None,
         current_host: Optional[str] = None,
+        file_banner: Optional[typing.Iterable[str]] = None,
     ) -> "MainConfig":
         if basedir is None:
             basedir = os.getcwd()
@@ -1213,6 +1216,7 @@ class MainConfig(kcommon.StructParseBase):
             yamlpath=yamlpath,
             clusters=clusters,
             current_host=current_host,
+            file_banner=None if file_banner is None else tuple(file_banner),
         )
 
     @staticmethod
@@ -1308,6 +1312,15 @@ class MainConfig(kcommon.StructParseBase):
             except Exception as e:
                 raise ValueError(f"Error reading YAML file {repr(filename)} after Jinja2 templating: {e}")
 
+        file_banner: list[str] = []
+        for line in contents.splitlines():
+            if line == "#":
+                file_banner.append("")
+            elif line.startswith("# "):
+                file_banner.append(line[2:])
+            else:
+                break
+
         if rnd_seed is None:
             # Generate a stable seed, based on the filename and the file
             # content. Callers that really want a random value, should pass a
@@ -1326,6 +1339,7 @@ class MainConfig(kcommon.StructParseBase):
                 basedir=basedir,
                 rnd_seed=rnd_seed,
                 current_host=effective_current_host,
+                file_banner=file_banner if file_banner else None,
             )
         except Exception as e:
             raise ValueError(f"Error loading YAML file {repr(filename)}: {e}")
@@ -1538,6 +1552,10 @@ def main() -> None:
         print(f"# remote_bridge_config: {cc.cluster_config.remote_bridge_config}")
         if cc.main_config.current_host is not None:
             print(f"# current_host: {cc.main_config.current_host}")
+        if cc.main_config.file_banner is not None:
+            print("# file banner: ")
+            for line in cc.main_config.file_banner:
+                print(f"#    {line}" if line else "")
         print(
             yaml.dump(
                 cc.main_config.serialize(show_secrets=args.show_secrets),
