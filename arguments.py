@@ -2,12 +2,12 @@ import common
 import os
 import argparse
 import sys
-import logging
 import argcomplete
 import difflib
 import typing
-from logger import logger, configure_logger
+from logger import logger
 from typing import Optional
+import ktoolbox.common as kcommon
 
 PRE_STEP = "pre"
 MASTERS_STEP = "masters"
@@ -80,7 +80,7 @@ def parse_args() -> argparse.Namespace:
 
     parser = argparse.ArgumentParser(description='Cluster deployment automation')
     parser.add_argument('config', metavar='config', type=str, help='Yaml file with config').completer = yaml_completer  # type: ignore
-    parser.add_argument('-v', '--verbosity', choices=['debug', 'info', 'warning', 'error', 'critical'], default='info', help='Set the logging level (default: info)')
+    kcommon.log_argparse_add_argument_verbosity(parser, default="info")
     parser.add_argument('--secret', dest='secrets_path', default=None, action='store', type=str, help='pull_secret.json path (default is in cwd)')
     parser.add_argument('--assisted-installer-url', dest='url', default='192.168.122.1', action='store', type=str, help='If set to 0.0.0.0 (the default), Assisted Installer will be started locally')
 
@@ -120,5 +120,5 @@ def parse_args() -> argparse.Namespace:
         range_list: Optional[common.RangeList] = getattr(args, 'worker_range_accumulator', None)
         args.worker_range = range_list or common.RangeList.UNLIMITED
 
-    configure_logger(getattr(logging, args.verbosity.upper()))
+    kcommon.log_config_logger(args.verbosity, logger, "ktoolbox")
     return args
