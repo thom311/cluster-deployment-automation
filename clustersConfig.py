@@ -1562,7 +1562,7 @@ def main() -> None:
     parser.add_argument('--cluster-index', default=0, type=int, help="A configuration can contain multiple clusters. This is the index which one to load")
     parser.add_argument('--secret', dest='secrets_path', default=None, action='store', type=str, help='pull_secret.json path (default is in cwd)')
     parser.add_argument("-H", '--current-host', dest='current_host', default=None, action='store', type=str, help=f'The hostname for applying the jinja template from {repr(clusterInfo.SHEET)}. Defaults to `hostname -f`')
-    parser.add_argument('-v', "--verbose", action='store_true', help='Enable debug logs')
+    kcommon.log_argparse_add_argument_verbose(parser)
     parser.add_argument("--show-secrets", action='store_true', help='Show secrets that would be hidden otherwise')
     parser.add_argument('filenames', nargs='+', help="List of filenames")
     parser.set_defaults(with_system_check=True)
@@ -1571,7 +1571,12 @@ def main() -> None:
 
     import logger as logger_module
 
-    logger_module.configure_logger(logging.DEBUG if args.verbose else logging.ERROR)
+    kcommon.log_config_logger(
+        logging.DEBUG if args.verbose else None,
+        logger_module.logger,
+        "ktoolbox",
+        default_level=logging.ERROR,
+    )
 
     for idx, f in enumerate(args.filenames):
         logger.info(f"Check file {repr(f)}")
