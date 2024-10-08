@@ -65,12 +65,6 @@ class DhcpConfig:
             subnets.append(_convert_to_cidr(subnet.subnet, subnet.netmask))
         return subnets
 
-    def _add_subnet_from_dhcpdsubnetconfig(self, subnet: DhcpdSubnetConfig) -> None:
-        self._subnet_configs.append(subnet)
-
-    def _add_host_from_dhcpdhostconfig(self, host_config: DhcpdHostConfig) -> None:
-        self._host_configs.append(host_config)
-
     def add_host(self, hostname: str, hardware_ethernet: str, fixed_address: str) -> None:
         # Generate host / subnet configs for the current Node
         new_hostconfig = DhcpdHostConfig(hostname=hostname, hardware_ethernet=hardware_ethernet, fixed_address=fixed_address)
@@ -81,18 +75,27 @@ class DhcpConfig:
             logger.debug(f"Subnet config for {new_hostconfig.fixed_address} already exists at {DHCPD_CONFIG_PATH}")
         else:
             logger.debug(f"Subnet config for {new_hostconfig.fixed_address} does not exist, adding this")
-            self._add_subnet_from_dhcpdsubnetconfig(subnetconfig)
+            self._subnet_configs.append(subnetconfig)
 
-        # Check if an entry already exists for the host
-        if new_hostconfig in self._host_configs:
-            return
+        # Delete entries with same IP address or MAC address (but different hostnames).
+        for idx, hc in reversed(list(enumerate(self._host_configs))):
+            if hc.hostname != new_hostconfig.hostname:
+                if new_hostconfig.fixed_address == hc.fixed_address or new_hostconfig.hardware_ethernet == hc.hardware_ethernet:
+                    logger.warning(f"Remove overlapping dhcp entry {hc} for new entry {new_hostconfig}")
+                    del self._host_configs[idx]
 
-        # Ensure existing hosts do not share addresses / hostname with the new entry
-        for hc in self._host_configs:
-            if new_hostconfig.hostname == hc.hostname or new_hostconfig.fixed_address == hc.fixed_address or new_hostconfig.hardware_ethernet == hc.hardware_ethernet:
-                logger.error_and_exit(f"New host {new_hostconfig} overlaps with existing host {hc}")
-
-        self._add_host_from_dhcpdhostconfig(new_hostconfig)
+        matching = [(idx, hc) for idx, hc in enumerate(self._host_configs) if hc.hostname == new_hostconfig.hostname]
+        if matching:
+            for idx, hc in reversed(matching[1:]):
+                logger.warning(f"Remove overlapping dhcp entry {hc} for new entry {new_hostconfig}")
+                del self._host_configs[idx]
+            idx, hc = matching[0]
+            if hc != new_hostconfig:
+                logger.info(f"Update dhcp entry {hc} for new entry {new_hostconfig}")
+                self._host_configs[idx] = new_hostconfig
+        else:
+            logger.info(f"Add dhcp entry {new_hostconfig}")
+            self._host_configs.append(new_hostconfig)
 
     def to_string(self) -> str:
         config_str = ""
