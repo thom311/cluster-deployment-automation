@@ -10,7 +10,7 @@ from imageRegistry import ImageRegistry
 class GitBuildLocalContainerInfo:
     name: str
     envvar: str
-    containerfile: str
+    containerfile: str | tuple[str, ...]
     registry: str
     project: str
     full_tag: str = dataclasses.field(init=False)
@@ -24,11 +24,21 @@ def git_build_local(rsh: host.Host, repo_dir: str, registry: str, project: str, 
         if os.environ.get("CDA_LOCAL_IMAGE_REBUILD") == "0" and rsh.run(shlex.join(["podman", "images", "-q", ci.full_tag])).out:
             logger.info(f"build container: {ci.full_tag} already exists. Skip")
             continue
-        cmd = f"podman build -t {shlex.quote(ci.full_tag)} -f {shlex.quote(ci.containerfile)}"
-        logger.info(f"build container: {cmd}")
         # FIXME: os.chdir() cannot be used in a multithreded application
         cur_dir = os.getcwd()
         os.chdir(repo_dir)
+
+        if not isinstance(ci.containerfile, str):
+            containerfile = ci.containerfile[0]
+            for c in ci.containerfile:
+                if rsh.exists(c):
+                    containerfile = c
+                    break
+        else:
+            containerfile = ci.containerfile
+
+        cmd = f"podman build -t {shlex.quote(ci.full_tag)} -f {shlex.quote(containerfile)}"
+        logger.info(f"build container: {cmd}")
         ret = rsh.run(cmd)
         os.chdir(cur_dir)
         if not ret.success():
