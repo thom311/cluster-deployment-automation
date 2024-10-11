@@ -46,6 +46,7 @@ class ImageRegistry:
 
         if ret.success() and self.rsh.run(shlex.join(['test', '-d', dir_name])).success():
             if not delete_all:
+                self.rsh.run(shlex.join(["podman", "start", CONTAINER_NAME]))
                 return dir_name, self.listen_port
             self._delete_all()
 
@@ -92,6 +93,7 @@ class ImageRegistry:
                     "run",
                     "--name",
                     CONTAINER_NAME,
+                    "--replace",
                     "-p",
                     f"{self.listen_port}:5000",
                     "-v",
