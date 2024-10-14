@@ -25,7 +25,7 @@ from typing import Union
 T = TypeVar("T")
 
 
-def check_type(value: typing.Any, type_hint: type[typing.Any]) -> bool:
+def check_type(value: typing.Any, type_hint: typing.Any) -> bool:
 
     # Some naive type checking. This is used for ensuring that data classes
     # contain the expected types (via @strict_dataclass.
