@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-import dataclasses
 import ipaddress
 from typing import Optional, TypeVar, Iterator, Type
 from concurrent.futures import Future
@@ -21,70 +20,10 @@ import tempfile
 import typing
 from collections.abc import Iterable
 from typing import Union
+import ktoolbox.common as kcommon
 
 
 T = TypeVar("T")
-
-
-def check_type(value: typing.Any, type_hint: typing.Any) -> bool:
-
-    # Some naive type checking. This is used for ensuring that data classes
-    # contain the expected types (via @strict_dataclass.
-    #
-    # That is most interesting, when we initialize the data class with
-    # data from an untrusted source (like elements from a JSON parser).
-
-    actual_type = typing.get_origin(type_hint)
-    if actual_type is None:
-        return isinstance(value, type_hint)
-
-    if actual_type is typing.Union:
-        args = typing.get_args(type_hint)
-        return any(check_type(value, a) for a in args)
-
-    if actual_type is list:
-        args = typing.get_args(type_hint)
-        (arg,) = args
-        return isinstance(value, list) and all(check_type(v, arg) for v in value)
-
-    if actual_type is dict:
-        args = typing.get_args(type_hint)
-        (arg_key, arg_val) = args
-        return isinstance(value, dict) and all(check_type(k, arg_key) and check_type(v, arg_val) for k, v in value.items())
-
-    if actual_type is tuple:
-        # tuple[int, ...] is not supported (yet).
-        args = typing.get_args(type_hint)
-        return isinstance(value, tuple) and len(value) == len(args) and all(check_type(value[i], args[i]) for i in range(len(value)))
-
-    return False
-
-
-TCallable = typing.TypeVar("TCallable", bound=typing.Callable[..., typing.Any])
-
-
-def strict_dataclass(cls: TCallable) -> TCallable:
-
-    init = getattr(cls, '__init__')
-
-    def wrapped_init(self, *args, **argv):  # type: ignore
-        init(self, *args, **argv)
-        for field in dataclasses.fields(self):
-            name = field.name
-            value = getattr(self, name)
-            type_hint = field.type
-            if not check_type(value, type_hint):
-                raise TypeError(f"Expected type '{type_hint}' for attribute '{name}' but received type '{type(value)}')")
-
-        # Normally, data classes support __post_init__(), which is called by __init__()
-        # already. Add a way for a @strict_dataclass to add additional validation *after*
-        # the original check.
-        _post_check = getattr(type(self), "_post_check", None)
-        if _post_check is not None:
-            _post_check(self)
-
-    setattr(cls, '__init__', wrapped_init)
-    return cls
 
 
 def str_to_list(input_str: str) -> list[int]:
@@ -186,7 +125,7 @@ class RangeList:
 RangeList.UNLIMITED = RangeList()
 
 
-@strict_dataclass
+@kcommon.strict_dataclass
 @dataclass
 class IPRouteAddressInfoEntry:
     family: str
@@ -197,7 +136,7 @@ class IPRouteAddressInfoEntry:
             raise ValueError("Invalid address family")
 
 
-@strict_dataclass
+@kcommon.strict_dataclass
 @dataclass
 class IPRouteAddressEntry:
     ifindex: int
@@ -306,7 +245,7 @@ def ip_addrs(rsh: host.Host, *, strict_parsing: bool = False, ifname: Optional[s
     return ip_addrs_parse(ret.out, strict_parsing=strict_parsing, ifname=ifname)
 
 
-@strict_dataclass
+@kcommon.strict_dataclass
 @dataclass
 class IPRouteLinkEntry:
     ifindex: int
@@ -347,7 +286,7 @@ def ip_links(rsh: host.Host, *, strict_parsing: bool = False, ifname: Optional[s
     return ip_links_parse(ret.out, strict_parsing=strict_parsing, ifname=ifname)
 
 
-@strict_dataclass
+@kcommon.strict_dataclass
 @dataclass
 class IPRouteRouteEntry:
     dst: str
