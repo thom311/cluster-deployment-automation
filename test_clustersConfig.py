@@ -47,7 +47,8 @@ def _test_parse_1(tfile: TFileConfig) -> None:
             vdict,
             yamlpath=".clusters[0]",
             yamlidx=0,
-        )
+        ),
+        yamlfile=yamlpath,
     )
     assert cc.cluster_config == cluster_config2
 
@@ -160,6 +161,8 @@ def check_test5(tfile: TFileConfig, cc: clustersConfig.ClustersConfig) -> None:
         ram=cc.masters[0].ram,
         cpu=cc.masters[0].cpu,
     )
+
+    assert cc.cluster_config.postconfig[1].dpu_operator_path == "../"
 
 
 TFILES = (

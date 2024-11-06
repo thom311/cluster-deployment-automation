@@ -8,6 +8,7 @@ from types import TracebackType
 import http.server
 from multiprocessing import Process
 from git.repo import Repo
+import shlex
 import shutil
 import host
 from logger import logger
@@ -592,7 +593,12 @@ def atomic_write(
                 pass
 
 
-def build_sriov_network_operator_check_permissions() -> bool:
+def podman_pull(
+    image: str,
+    *,
+    tls_verify: Optional[bool] = None,
+    authfile: Optional[str] = None,
+) -> bool:
     # To build sriov_network_operator, we must be able to pull build images
     # from registry.ci.ipenshift.org. See [1].
     #
@@ -604,8 +610,14 @@ def build_sriov_network_operator_check_permissions() -> bool:
     #
     # [1] https://github.com/openshift/sriov-network-operator/blob/34f3e5f934ca72eae57667d7a9185f5af47aea3a/Dockerfile.rhel7#L1
     # [2] https://oauth-openshift.apps.ci.l2s4.p1.openshiftapps.com/oauth/token/request
+    s_authfile = ""
+    if authfile is not None:
+        s_authfile = f" --authfile={shlex.quote(authfile)}"
+    s_tlsverify = ""
+    if not tls_verify:
+        s_tlsverify = f" --tls-verify={'true' if tls_verify else 'false'}"
     rsh = host.LocalHost()
-    ret = rsh.run("podman pull registry.ci.openshift.org/ocp/builder:rhel-9-golang-1.21-openshift-4.16")
+    ret = rsh.run(f"podman pull{s_tlsverify}{s_authfile} {shlex.quote(image)}")
     return ret.success()
 
 

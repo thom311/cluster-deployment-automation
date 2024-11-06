@@ -12,6 +12,7 @@ from common import git_repo_setup
 from dpuVendor import init_vendor_plugin
 import common
 import re
+from ktoolbox.common import unwrap
 
 MICROSHIFT_KUBECONFIG = "/root/kubeconfig.microshift"
 
@@ -148,7 +149,7 @@ def ExtraConfigDpu(cc: ClustersConfig, cfg: ExtraConfigArgs, futures: dict[str, 
 
     repo = cfg.resolve_dpu_operator_path()
     dpu_operator = DpuOperator(repo)
-    dpu_operator.build_push(cfg.builder_image, cfg.base_image)
+    dpu_operator.build_push(unwrap(cfg.builder_image), unwrap(cfg.base_image))
     dpu_operator.start(client)
 
     # Deploy dpu daemon
@@ -178,7 +179,7 @@ def ExtraConfigDpuHost(cc: ClustersConfig, cfg: ExtraConfigArgs, futures: dict[s
 
     repo = cfg.resolve_dpu_operator_path()
     dpu_operator = DpuOperator(repo)
-    dpu_operator.build_push(cfg.builder_image, cfg.base_image)
+    dpu_operator.build_push(unwrap(cfg.builder_image), unwrap(cfg.base_image))
     dpu_operator.start(client)
 
     # Assuming that all workers have a DPU

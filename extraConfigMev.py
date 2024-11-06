@@ -9,9 +9,6 @@ import time
 from ktoolbox.common import unwrap
 
 
-LATEST_MEV_FW = "1.8.0.10052"
-
-
 def ExtraConfigMevFwUp(cc: ClustersConfig, cfg: ExtraConfigArgs, futures: dict[str, Future[Optional[host.Result]]]) -> None:
     logger.info("Running pre config step to flash MeV firmware on IPU IMC")
 
@@ -22,19 +19,16 @@ def ExtraConfigMevFwUp(cc: ClustersConfig, cfg: ExtraConfigArgs, futures: dict[s
     assert master.host_side_bmc is not None
 
     # Check if a particular firmware version is being requested or if we will use default
-    if cfg.mev_version == "":
-        logger.info("Desired MeV fw release not specified, will install the latest by default")
-        cfg.mev_version = LATEST_MEV_FW
-    logger.info(f"Will ensure {master.bmc} is on firmware version: {cfg.mev_version}")
+    logger.info(f"Will ensure {master.bmc} is on firmware version: {unwrap(cfg.mev_version)}")
 
     # We should only perform an update if it is required, or if the user insists we do so
-    if not cfg.force_mev_fw_up:
+    if not unwrap(cfg.force_mev_fw_up):
         logger.info("Checking if firmware update is required")
         imc = host.Host(unwrap(master.bmc))
         if imc.ping():
             imc.ssh_connect(unwrap(master.bmc_user), unwrap(master.bmc_password))
             ret = imc.run("cat /etc/issue.net")
-            if cfg.mev_version in ret.out:
+            if unwrap(cfg.mev_version) in ret.out:
                 logger.info(f"Current MeV fw version is {ret.out.strip()}, no need to update")
                 return
 
@@ -42,7 +36,7 @@ def ExtraConfigMevFwUp(cc: ClustersConfig, cfg: ExtraConfigArgs, futures: dict[s
     lh = host.LocalHost()
 
     logger.info("Starting flash of SSD/SPI (this will take some time ~40min)")
-    fw_up_cmd = f"--dpu-type ipu --imc-address {master.bmc} firmware up --version {cfg.mev_version}"
+    fw_up_cmd = f"--dpu-type ipu --imc-address {master.bmc} firmware up --version {unwrap(cfg.mev_version)}"
     ret = lh.run_in_container(fw_up_cmd, interactive=True)
 
     if not ret.success():
@@ -57,7 +51,7 @@ def ExtraConfigMevFwUp(cc: ClustersConfig, cfg: ExtraConfigArgs, futures: dict[s
     # Access the IMC to validate the flash was successful
     imc = master.create_rhost_bmc()
     ret = imc.run("cat /etc/issue.net")
-    if cfg.mev_version not in ret.out or ret.returncode != 0:
+    if unwrap(cfg.mev_version) not in ret.out or ret.returncode != 0:
         logger.error_and_exit(f"Mev firmware release is not the expected version: {ret.out}")
 
     logger.info("MeV firmware flash complete")
