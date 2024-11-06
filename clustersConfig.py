@@ -2,6 +2,7 @@ import os
 import io
 import sys
 import re
+import typing
 import functools
 import ipaddress
 from typing import Optional
@@ -80,19 +81,23 @@ class ClusterConfigStructParseBase(kcommon.StructParseBaseNamed):
         return self._owner_reference.get(ClusterConfig)
 
 
-@dataclass
-class ExtraConfigArgs:
+@kcommon.strict_dataclass
+@dataclass(frozen=True, kw_only=True)
+class ExtraConfigArgs(ClusterConfigStructParseBase):
     base_path: str
     name: str
 
+    # Either "preconfig" or "postconfig"
+    config_type: str
+
     # OVN-K extra configs:
     # New ovn-k image to use.
-    image: Optional[str] = None
-    # Time to wait for new ovn-k to roll out.
-    ovnk_rollout_timeout: str = "20m"
+    image: Optional[str]
 
-    kubeconfig: Optional[str] = None
-    mapping: Optional[list[dict[str, str]]] = None
+    # Time to wait for new ovn-k to roll out.
+    ovnk_rollout_timeout: Optional[str]
+
+    mapping: Optional[tuple[Mapping[str, str], ...]]
 
     # With "sriov_network_operator", if true build the container images locally
     # and push them to the internal container registry of openshift.
@@ -105,39 +110,239 @@ class ExtraConfigArgs:
     # If enabled, an existing "/root/sriov-network-operator" directory is not
     # wiped and you can prepare there the version you want to build and
     # install.
-    sriov_network_operator_local: bool = False
+    sriov_network_operator_local: Optional[bool]
 
     # Custom config to the scheduler whether the masters are allowed to run workloads.
-    schedulable: bool = True
+    schedulable: Optional[bool]
     # https://console.redhat.com/insights/connector/activation-keys
-    organization_id: Optional[str] = None
+    organization_id: Optional[str]
 
-    activation_key: Optional[str] = None
+    activation_key: Optional[str]
 
-    dpu_operator_path: str = "/root/dpu-operator"
+    dpu_operator_path: Optional[str]
 
-    dpu_net_interface: Optional[str] = "ens2f0"
+    builder_image: Optional[str]
 
-    builder_image: str = ""
+    base_image: Optional[str]
 
-    base_image: str = ""
+    dpu_net_interface: Optional[str]
 
-    mev_version: str = ""
+    mev_version: Optional[str]
 
-    force_mev_fw_up: bool = False
+    force_mev_fw_up: Optional[bool]
 
-    def pre_check(self) -> None:
-        if self.sriov_network_operator_local:
-            if self.name != "sriov_network_operator":
-                raise ValueError("\"sriov_network_operator_local\" can only be set to TRUE for name=\"sriov_network_operator\"")
-            if not common.build_sriov_network_operator_check_permissions():
-                raise ValueError("Building sriov_network_operator requires permissions to fetch. Get a token from https://oauth-openshift.apps.ci.l2s4.p1.openshiftapps.com/oauth/token/request and issue `podman login registry.ci.openshift.org`")
+    def serialize(self, *, show_secrets: bool = False) -> dict[str, Any]:
+        extra_1: dict[str, Any] = {}
+        kcommon.dict_add_optional(extra_1, "image", self.image)
+        kcommon.dict_add_optional(extra_1, "ovnk_rollout_timeout", self.ovnk_rollout_timeout)
+        if self.mapping is not None:
+            extra_1["mapping"] = [dict(d) for d in self.mapping]
+        kcommon.dict_add_optional(extra_1, "sriov_network_operator_local", self.sriov_network_operator_local)
+        kcommon.dict_add_optional(extra_1, "schedulable", self.schedulable)
+        kcommon.dict_add_optional(extra_1, "organization_id", _show_secret(self.organization_id, show=show_secrets))
+        kcommon.dict_add_optional(extra_1, "activation_key", _show_secret(self.activation_key, show=show_secrets))
+        kcommon.dict_add_optional(extra_1, "dpu_operator_path", self.dpu_operator_path)
+        kcommon.dict_add_optional(extra_1, "builder_image", self.builder_image)
+        kcommon.dict_add_optional(extra_1, "base_image", self.base_image)
+        kcommon.dict_add_optional(extra_1, "dpu_net_interface", self.dpu_net_interface)
+        kcommon.dict_add_optional(extra_1, "mev_version", self.mev_version)
+        kcommon.dict_add_optional(extra_1, "force_mev_fw_up", self.force_mev_fw_up)
+        return {
+            **super().serialize(),
+            **extra_1,
+        }
+
+    @staticmethod
+    def get_extra_configs() -> Mapping[str, Any]:
+        import extraConfigRunner
+
+        return extraConfigRunner.EXTRA_CONFIGS
+
+    @staticmethod
+    def parse(
+        pctx: StructParseParseContext,
+        *,
+        base_path: str,
+        config_type: str,
+    ) -> "ExtraConfigArgs":
+        with pctx.with_strdict() as varg:
+
+            name = kcommon.structparse_pop_str_name(varg.for_name())
+
+            if name not in ExtraConfigArgs.get_extra_configs():
+                raise pctx.value_error(f"must be one of {repr(sorted(ExtraConfigArgs.get_extra_configs()))}", key="name")
+
+            def _raise_mandatory_for_name(key: str) -> None:
+                raise pctx.value_error(f"missing parameter {repr(key)} for {config_type} {repr(name)}")
+
+            def _check_missing_is_mandatory_for_name(is_valid: bool) -> typing.Callable[[kcommon.StructParsePopContext], None]:
+                def _fcn(pargs: kcommon.StructParsePopContext) -> None:
+                    if is_valid:
+                        _raise_mandatory_for_name(pargs.key)
+
+                return _fcn
+
+            def _check_ctx_is_valid_for_name(is_valid: bool) -> typing.Callable[[kcommon.StructParsePopContext, Any], None]:
+                def _fcn(pargs: kcommon.StructParsePopContext, arg: Any) -> None:
+                    if not is_valid:
+                        raise pctx.value_error(f"parameter is not valid for {config_type} {repr(name)}", key=pargs.key)
+
+                return _fcn
+
+            is_valid = name in ("cno", "ovnk8s", "sriov")
+            image = kcommon.structparse_pop_str(
+                varg.for_key("image"),
+                default=None,
+                check_ctx=_check_ctx_is_valid_for_name(is_valid),
+            )
+            if image is None and is_valid and name not in ("sriov",):
+                _raise_mandatory_for_name("image")
+
+            is_valid = name in ("ovnk8s",)
+            ovnk_rollout_timeout = kcommon.structparse_pop_str(
+                varg.for_key("ovnk_rollout_timeout"),
+                default="20m" if is_valid else None,
+                check_ctx=_check_ctx_is_valid_for_name(is_valid),
+            )
+            if ovnk_rollout_timeout is not None:
+                ovnk_rollout_timeout = ovnk_rollout_timeout.strip()
+                if not re.search("^[0-9]+[smh]?$", ovnk_rollout_timeout):
+                    raise pctx.value_error(f"{repr(ovnk_rollout_timeout)} is not a valid timeout", key="ovnk_rollout_timeout")
+
+            def _construct_mapping(pctx2: StructParseParseContext) -> tuple[Mapping[str, str], ...]:
+                arg = pctx2.arg
+                if isinstance(arg, dict):
+                    arg = [arg]
+                good = isinstance(arg, list)
+                good = good and all(isinstance(k, str) and isinstance(v, str) for d in arg for k, v in d.items())
+                good = good and all(("worker" in d and "bf" in d) for d in arg)
+                if not good:
+                    raise pctx2.value_error("expects a list of str:str dictionaries for the environment variables (mandatory keys \"worker\" and \"bf\")")
+                return tuple(dict(d) for d in arg)
+
+            is_valid = name in ("dpu_tenant",)
+            mapping = kcommon.structparse_pop_obj(
+                varg.for_key("mapping"),
+                construct=_construct_mapping,
+                default=None,
+                check_ctx=_check_ctx_is_valid_for_name(is_valid),
+            )
+            if mapping is None:
+                if is_valid:
+                    raise pctx.value_error("missing mandatory mapping parameter (list of strdicts)", key="mapping")
+
+            is_valid = name in ("sriov_network_operator",)
+            sriov_network_operator_local = kcommon.structparse_pop_bool(
+                varg.for_key("sriov_network_operator_local"),
+                default=False if is_valid else None,
+                check_ctx=_check_ctx_is_valid_for_name(is_valid),
+            )
+
+            is_valid = name in ("masters_schedulable",)
+            schedulable = kcommon.structparse_pop_bool(
+                varg.for_key("schedulable"),
+                default=True if is_valid else None,
+                check_ctx=_check_ctx_is_valid_for_name(is_valid),
+            )
+
+            is_valid = name in ("rh_subscription",)
+            organization_id = kcommon.structparse_pop_str(
+                varg.for_key("organization_id"),
+                default=None,
+                check_missing=_check_missing_is_mandatory_for_name(is_valid),
+                check_ctx=_check_ctx_is_valid_for_name(is_valid),
+            )
+
+            activation_key = kcommon.structparse_pop_str(
+                varg.for_key("activation_key"),
+                default=None,
+                check_missing=_check_missing_is_mandatory_for_name(is_valid),
+                check_ctx=_check_ctx_is_valid_for_name(is_valid),
+            )
+
+            is_valid = name in ("dpu_operator_dpu", "dpu_operator_host")
+            dpu_operator_path = kcommon.structparse_pop_str(
+                varg.for_key("dpu_operator_path"),
+                default="/root/dpu-operator" if is_valid else None,
+                check_ctx=_check_ctx_is_valid_for_name(is_valid),
+            )
+
+            def _pop_image(*, key: str, is_valid: bool) -> Optional[str]:
+                return kcommon.structparse_pop_str(
+                    varg.for_key(key),
+                    default="" if is_valid else None,
+                    empty_as_default=False,
+                    check_ctx=_check_ctx_is_valid_for_name(is_valid),
+                )
+
+            builder_image = _pop_image(
+                key="builder_image",
+                is_valid=is_valid,
+            )
+            base_image = _pop_image(
+                key="base_image",
+                is_valid=is_valid,
+            )
+
+            is_valid = name in ("dpu_operator_host",)
+            dpu_net_interface = kcommon.structparse_pop_str(
+                varg.for_key("dpu_net_interface"),
+                default="ens2f0" if is_valid else None,
+                check_ctx=_check_ctx_is_valid_for_name(is_valid),
+            )
+            if dpu_net_interface is not None:
+                val_valid, dpu_net_interface = _normalize_ifname(dpu_net_interface)
+                if not val_valid:
+                    raise pctx.value_error(f"{repr(dpu_net_interface)} is not a valid interface name", key="dpu_net_interface")
+
+            is_valid = name in ("mev_firmware_up",)
+            mev_version = kcommon.structparse_pop_str(
+                varg.for_key("mev_version"),
+                default="1.8.0.10052" if is_valid else None,
+                check_ctx=_check_ctx_is_valid_for_name(is_valid),
+            )
+            force_mev_fw_up = kcommon.structparse_pop_bool(
+                varg.for_key("force_mev_fw_up"),
+                default=False if is_valid else None,
+                check_ctx=_check_ctx_is_valid_for_name(is_valid),
+            )
+
+        return ExtraConfigArgs(
+            yamlidx=pctx.yamlidx,
+            yamlpath=pctx.yamlpath,
+            base_path=base_path,
+            name=name,
+            config_type=config_type,
+            image=image,
+            ovnk_rollout_timeout=ovnk_rollout_timeout,
+            mapping=mapping,
+            sriov_network_operator_local=sriov_network_operator_local,
+            schedulable=schedulable,
+            organization_id=organization_id,
+            activation_key=activation_key,
+            dpu_operator_path=dpu_operator_path,
+            builder_image=builder_image,
+            base_image=base_image,
+            dpu_net_interface=dpu_net_interface,
+            mev_version=mev_version,
+            force_mev_fw_up=force_mev_fw_up,
+        )
 
     def resolve_dpu_operator_path(self) -> str:
+        assert self.dpu_operator_path
         if self.dpu_operator_path[0] == "/":
             return self.dpu_operator_path
         else:
             return os.path.normpath(os.path.join(self.base_path, self.dpu_operator_path))
+
+    def pre_check(self) -> None:
+        if self.sriov_network_operator_local:
+            if not common.podman_pull(
+                "registry.ci.openshift.org/ocp/builder:rhel-9-golang-1.21-openshift-4.16",
+            ):
+                raise ValueError(
+                    f"\"{self.yamlpath}.sriov_network_operator_local\": Building sriov-network-operator requires permissions to fetch. Get a token from https://oauth-openshift.apps.ci.l2s4.p1.openshiftapps.com/oauth/token/request and issue `podman login registry.ci.openshift.org`"
+                )
 
 
 @kcommon.strict_dataclass
@@ -477,6 +682,8 @@ class ClusterConfig(kcommon.StructParseBaseNamed):
     masters: Mapping[str, NodeConfig]
     workers: Mapping[str, NodeConfig]
     hosts: Mapping[str, HostConfig]
+    preconfig: tuple[ExtraConfigArgs, ...]
+    postconfig: tuple[ExtraConfigArgs, ...]
 
     def __post_init__(self) -> None:
         for c in self.hosts.values():
@@ -485,6 +692,10 @@ class ClusterConfig(kcommon.StructParseBaseNamed):
             n._owner_reference.init(self)
         for n in self.workers.values():
             n._owner_reference.init(self)
+        for e in self.preconfig:
+            e._owner_reference.init(self)
+        for e in self.postconfig:
+            e._owner_reference.init(self)
 
     def serialize(self, *, show_secrets: bool = False) -> dict[str, Any]:
         extra_1: dict[str, Any] = {}
@@ -508,15 +719,19 @@ class ClusterConfig(kcommon.StructParseBaseNamed):
             "masters": [n.serialize(show_secrets=show_secrets) for n in self.masters.values()],
             "workers": [n.serialize(show_secrets=show_secrets) for n in self.workers.values()],
             "hosts": [h.serialize(show_secrets=show_secrets) for h in self.hosts.values()],
+            "preconfig": [h.serialize(show_secrets=show_secrets) for h in self.preconfig],
+            "postconfig": [h.serialize(show_secrets=show_secrets) for h in self.postconfig],
         }
 
     @staticmethod
     def parse(
         pctx: StructParseParseContext,
         *,
+        yamlfile: str,
         basedir: Optional[str] = None,
         rnd_seed: Optional[str] = None,
     ) -> "ClusterConfig":
+        yamlfile = os.path.normpath(os.path.abspath(yamlfile))
         if basedir is None:
             basedir = os.getcwd()
 
@@ -650,10 +865,25 @@ class ClusterConfig(kcommon.StructParseBaseNamed):
                 default_network_api_port=network_api_port,
             )
 
-            # TODO: postconfig and preconfig is not handled by ClusterConfig at the moment.
-            # It's still handled by ClustersConfig. Just pop the entries from here.
-            varg.vdict.pop("preconfig", None)
-            varg.vdict.pop("postconfig", None)
+            base_path = os.path.dirname(yamlfile)
+
+            preconfig = kcommon.structparse_pop_objlist(
+                varg.for_key("preconfig"),
+                construct=lambda pctx2: ExtraConfigArgs.parse(
+                    pctx2,
+                    base_path=base_path,
+                    config_type="preconfig",
+                ),
+            )
+
+            postconfig = kcommon.structparse_pop_objlist(
+                varg.for_key("postconfig"),
+                construct=lambda pctx2: ExtraConfigArgs.parse(
+                    pctx2,
+                    base_path=base_path,
+                    config_type="postconfig",
+                ),
+            )
 
         if is_openshift_like(kind):
             assert kubeconfig
@@ -729,6 +959,8 @@ class ClusterConfig(kcommon.StructParseBaseNamed):
             masters=masters,
             workers=workers,
             hosts=hosts,
+            preconfig=preconfig,
+            postconfig=postconfig,
         )
 
     @staticmethod
@@ -778,13 +1010,12 @@ class ClusterConfig(kcommon.StructParseBaseNamed):
 
 
 class ClustersConfig:
+    yaml_path: str
     worker_range: common.RangeList
     external_port: str
     local_bridge_config: BridgeConfig
     remote_bridge_config: BridgeConfig
     ip_range: tuple[str, str]
-    preconfig: list[ExtraConfigArgs]
-    postconfig: list[ExtraConfigArgs]
     secrets_path: str
 
     def __init__(
@@ -799,6 +1030,8 @@ class ClustersConfig:
         self.secrets_path = secrets_path
         self.worker_range = worker_range
 
+        self.base_path = os.path.dirname(os.path.abspath(yaml_path))
+
         cc = self._load_full_config(yaml_path)
 
         self.cluster_config = ClusterConfig.parse(
@@ -807,18 +1040,11 @@ class ClustersConfig:
                 yamlpath=".clusters[0]",
                 yamlidx=0,
             ),
+            yamlfile=yaml_path,
             rnd_seed=rnd_seed,
         )
 
         self.external_port = self.cluster_config.external_port or "auto"
-
-        base_path = os.path.dirname(yaml_path)
-        self.preconfig: list[ExtraConfigArgs] = []
-        self.postconfig: list[ExtraConfigArgs] = []
-        for c in cc.get("preconfig", ()):
-            self.preconfig.append(ExtraConfigArgs(base_path, **c))
-        for c in cc.get("postconfig", ()):
-            self.postconfig.append(ExtraConfigArgs(base_path, **c))
 
         if test_only:
             # Skip the remaining steps. They access the system, which makes them
@@ -831,9 +1057,9 @@ class ClustersConfig:
         if self.cluster_config.kind == "openshift":
             self.configure_ip_range(self.cluster_config)
 
-        for c in self.preconfig:
+        for c in self.cluster_config.preconfig:
             c.pre_check()
-        for c in self.postconfig:
+        for c in self.cluster_config.postconfig:
             c.pre_check()
 
     def configure_ip_range(self, cluster_config: ClusterConfig) -> None:
@@ -1046,6 +1272,13 @@ class ClustersConfig:
 
     def local_worker_vms(self) -> list[NodeConfig]:
         return [x for x in self.worker_vms() if x.node == "localhost"]
+
+    def make_absolute_path(self, path: str) -> str:
+        if not path:
+            raise ValueError("invalid empty path")
+        if path[0] == "/":
+            return path
+        return os.path.join(self.base_path, path)
 
 
 def main() -> None:
