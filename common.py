@@ -416,6 +416,19 @@ def port_to_ip(host: host.Host, port_name: str) -> Optional[str]:
     return None
 
 
+_cda_path: Optional[str] = None
+
+
+def cda_path(*components: str) -> str:
+    global _cda_path
+    p = _cda_path
+    if p is None:
+        p = os.path.abspath(os.path.dirname(__file__))
+        _cda_path = p
+
+    return os.path.join(p, *components)
+
+
 def get_auto_port(host: host.Host) -> str:
     def ipa_is_candidate(ipa: IPRouteAddressEntry) -> bool:
         if not ipa.has_carrier():
