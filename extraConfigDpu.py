@@ -147,7 +147,7 @@ def ExtraConfigDpu(cc: ClustersConfig, cfg: ExtraConfigArgs, futures: dict[str, 
     # We need to manually start the p4 sdk container currently for the IPU plugin
     vendor_plugin.build_push_start(acc, imgReg)
 
-    repo = cfg.resolve_dpu_operator_path()
+    repo = unwrap(cfg.dpu_operator_path_abs)
     dpu_operator = DpuOperator(repo)
     dpu_operator.build_push(unwrap(cfg.builder_image), unwrap(cfg.base_image))
     dpu_operator.start(client)
@@ -177,7 +177,7 @@ def ExtraConfigDpuHost(cc: ClustersConfig, cfg: ExtraConfigArgs, futures: dict[s
     h = host.Host(node.node)
     h.ssh_connect("core")
 
-    repo = cfg.resolve_dpu_operator_path()
+    repo = unwrap(cfg.dpu_operator_path_abs)
     dpu_operator = DpuOperator(repo)
     dpu_operator.build_push(unwrap(cfg.builder_image), unwrap(cfg.base_image))
     dpu_operator.start(client)
