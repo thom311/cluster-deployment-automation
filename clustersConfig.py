@@ -3,6 +3,7 @@ import io
 import logging
 import threading
 import re
+import shlex
 import typing
 import functools
 from typing import Optional
@@ -352,13 +353,45 @@ class ExtraConfigArgs(ClusterConfigStructParseBase):
         return self.cluster_config.main_config.resolve_path(self.dpu_operator_path)
 
     def system_check(self) -> None:
+        def _check_image(
+            image: str,
+            *,
+            key: Optional[str] = None,
+            msg: Optional[str] = None,
+        ) -> None:
+            if not image:
+                return
+            if common.podman_pull(image):
+                return
+            if msg is None:
+                repo = image.split("/", 1)[0]
+                if repo == "registry.ci.openshift.org":
+                    msg = f"Get a token from https://oauth-openshift.apps.ci.l2s4.p1.openshiftapps.com/oauth/token/request and issue `podman login {shlex.quote(repo)}`"
+                else:
+                    msg = f"Check that `podman login {shlex.quote(repo)}` works"
+            if msg:
+                msg = " " + msg
+            raise self.value_error(
+                f"building image requires permission to `podman pull {shlex.quote(image)}`.{msg}",
+                key=key,
+            )
+
         if self.sriov_network_operator_local:
-            if not common.podman_pull(
+            _check_image(
                 "registry.ci.openshift.org/ocp/builder:rhel-9-golang-1.21-openshift-4.16",
-            ):
-                raise ValueError(
-                    f"\"{self.yamlpath}.sriov_network_operator_local\": Building sriov-network-operator requires permissions to fetch. Get a token from https://oauth-openshift.apps.ci.l2s4.p1.openshiftapps.com/oauth/token/request and issue `podman login registry.ci.openshift.org`"
-                )
+                key="sriov_network_operator_local",
+            )
+        if self.name in ("dpu_operator_dpu", "dpu_operator_host"):
+            _check_image(
+                unwrap(self.builder_image),
+                key="builder_image",
+            )
+            _check_image(
+                unwrap(self.base_image),
+                key="base_image",
+            )
+            if not self.builder_image or not self.base_image:
+                _check_image("registry.ci.openshift.org/ocp/builder:rhel-9-golang-1.22-openshift-4.17")
 
 
 @kcommon.strict_dataclass
