@@ -26,6 +26,14 @@ from ktoolbox.common import StructParseParseContext
 from ktoolbox.common import unwrap
 
 
+def parse_container_image(image: str) -> tuple[str, bool]:
+    tls_verify = True
+    if image and image[0] == "!":
+        tls_verify = False
+        image = image[1:]
+    return image, tls_verify
+
+
 def _show_secret(secret: Optional[str], *, show: bool) -> Optional[str]:
     if secret is None:
         return None
@@ -358,20 +366,26 @@ class ExtraConfigArgs(ClusterConfigStructParseBase):
             key: Optional[str] = None,
             msg: Optional[str] = None,
         ) -> None:
+            image, tls_verify = parse_container_image(image)
             if not image:
                 return
-            if common.podman_pull(image):
+            s_tlsverify = ""
+            v_tlsverify: Optional[bool] = None
+            if not tls_verify:
+                s_tlsverify = " --tls-verify=false"
+                v_tlsverify = False
+            if common.podman_pull(image, tls_verify=v_tlsverify):
                 return
             if msg is None:
                 repo = image.split("/", 1)[0]
                 if repo == "registry.ci.openshift.org":
-                    msg = f"Get a token from https://oauth-openshift.apps.ci.l2s4.p1.openshiftapps.com/oauth/token/request and issue `podman login {shlex.quote(repo)}`"
+                    msg = f"Get a token from https://oauth-openshift.apps.ci.l2s4.p1.openshiftapps.com/oauth/token/request and issue `podman login{s_tlsverify} {shlex.quote(repo)}`"
                 else:
-                    msg = f"Check that `podman login {shlex.quote(repo)}` works"
+                    msg = f"Check that `podman login{s_tlsverify} {shlex.quote(repo)}` works"
             if msg:
                 msg = " " + msg
             raise self.value_error(
-                f"building image requires permission to `podman pull {shlex.quote(image)}`.{msg}",
+                f"building image requires permission to `podman pull{s_tlsverify} {shlex.quote(image)}`.{msg}",
                 key=key,
             )
 

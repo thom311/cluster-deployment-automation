@@ -614,7 +614,7 @@ def podman_pull(
     if authfile is not None:
         s_authfile = f" --authfile={shlex.quote(authfile)}"
     s_tlsverify = ""
-    if not tls_verify:
+    if tls_verify is not None:
         s_tlsverify = f" --tls-verify={'true' if tls_verify else 'false'}"
     rsh = host.LocalHost()
     ret = rsh.run(f"podman pull{s_tlsverify}{s_authfile} {shlex.quote(image)}")
