@@ -31,6 +31,7 @@ class ClusterInfo:
     ipu_mac_addresses: list[str] = dataclasses.field(default_factory=list)
     workers: list[str] = dataclasses.field(default_factory=list)
     bmcs: list[str] = dataclasses.field(default_factory=list)
+    card_type: str = ""
 
 
 def _default_cred_paths(*, honor_env: bool = True) -> list[str]:
@@ -105,6 +106,8 @@ def load_all_cluster_info(
             continue
         if "BF2" in row["Name"]:
             continue
+        if row["Card type"]:
+            cluster.card_type = row["Card type"]
         if row["Card type"] == "IPU-Cluster":
             cluster.bmc_imc_hostnames.append(row["BMC/IMC hostname"])
             cluster.ipu_mac_addresses.append(row["MAC"])
