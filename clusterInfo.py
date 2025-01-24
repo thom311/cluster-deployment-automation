@@ -1,11 +1,15 @@
 import dataclasses
+import re
 import os
 import gspread
 import tenacity
+import typing
 from typing import Optional
 from collections.abc import Iterable
+from collections.abc import Mapping
 from oauth2client.service_account import ServiceAccountCredentials
 from logger import logger
+import common
 
 
 ENV_CDA_CLUSTERINFO_CREDENTIALS = "CDA_CLUSTERINFO_CREDENTIALS"
@@ -83,10 +87,16 @@ def read_sheet(
     return [{k: str(v) for k, v in record.items()} for record in sheet1.get_all_records()]
 
 
-def load_all_cluster_info() -> dict[str, ClusterInfo]:
+def load_all_cluster_info(
+    *,
+    credentials: Optional[str | Iterable[str]] = None,
+    sheet: Optional[Iterable[Mapping[str, str]]] = None,
+) -> dict[str, ClusterInfo]:
+    if sheet is None:
+        sheet = read_sheet(credentials=credentials)
     cluster = None
     ret = []
-    for row in read_sheet():
+    for row in sheet:
         if row["Name"].startswith("Cluster"):
             if cluster is not None:
                 ret.append(cluster)
@@ -126,8 +136,84 @@ def validate_cluster_info(cluster_info: ClusterInfo) -> None:
             raise ValueError(f"Unfilled IMPI address found for cluster {cluster_info.name}")
 
 
-def load_cluster_info(provision_host: str) -> ClusterInfo:
-    all_cluster_info = load_all_cluster_info()
-    for ci in all_cluster_info.values():
-        validate_cluster_info(ci)
-    return all_cluster_info[provision_host]
+@typing.overload
+def load_cluster_info(
+    hostname: Optional[str] = None,
+    *,
+    cluster_infos: Optional[Mapping[str, ClusterInfo]] = None,
+    validate: bool = True,
+    try_hostname: bool = True,
+    match_name: Optional[str | re.Pattern[str]] = None,
+    required: typing.Literal[True],
+) -> ClusterInfo:
+    pass
+
+
+@typing.overload
+def load_cluster_info(
+    hostname: Optional[str] = None,
+    *,
+    cluster_infos: Optional[Mapping[str, ClusterInfo]] = None,
+    validate: bool = True,
+    try_hostname: bool = True,
+    match_name: Optional[str | re.Pattern[str]] = None,
+    required: bool = True,
+) -> Optional[ClusterInfo]:
+    pass
+
+
+def load_cluster_info(
+    hostname: Optional[str] = None,
+    *,
+    credentials: Optional[str | Iterable[str]] = None,
+    cluster_infos: Optional[Mapping[str, ClusterInfo]] = None,
+    validate: bool = True,
+    try_hostname: bool = True,
+    match_name: Optional[str | re.Pattern[str]] = None,
+    required: bool = True,
+) -> Optional[ClusterInfo]:
+    if hostname is None:
+        hostname = common.current_host()
+    if cluster_infos is None:
+        cluster_infos = load_all_cluster_info(credentials=credentials)
+
+    cluster_info: Optional[ClusterInfo] = None
+
+    if hostname:
+        cluster_info = cluster_infos.get(hostname, None)
+
+    if cluster_info is None:
+        result_list: list[ClusterInfo] = []
+        if try_hostname:
+            if "." in hostname:
+                hostname_part = hostname.split(".")[0]
+            else:
+                hostname_part = hostname
+
+            def _match_hostname(ci_hostname: str) -> bool:
+                if "." in ci_hostname and "." in hostname:
+                    # Both hostnames are FQDN. We don't match by hostname alone.
+                    return False
+                return ci_hostname.startswith(hostname_part) and (len(ci_hostname) == len(hostname_part) or ci_hostname[len(hostname_part)] == ".")
+
+            result_list.extend(ci for ci in cluster_infos.values() if _match_hostname(ci.provision_host))
+        if match_name:
+
+            def _match_name(name: str) -> bool:
+                if isinstance(match_name, str):
+                    return name == match_name
+                return bool(match_name.search(name))
+
+            result_list.extend(ci for ci in cluster_infos.values() if _match_name(ci.name))
+        if len({ci.provision_host for ci in result_list}) == 1:
+            cluster_info = result_list[0]
+
+    if cluster_info is None:
+        if required:
+            raise RuntimeError("No cluster info for hostname {repr(hostname)}")
+        return None
+
+    if validate:
+        validate_cluster_info(cluster_info)
+
+    return cluster_info
