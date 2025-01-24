@@ -1,3 +1,4 @@
+import argparse
 import dataclasses
 import re
 import os
@@ -10,6 +11,7 @@ from collections.abc import Mapping
 from oauth2client.service_account import ServiceAccountCredentials
 from logger import logger
 import common
+import json
 
 
 ENV_CDA_CLUSTERINFO_CREDENTIALS = "CDA_CLUSTERINFO_CREDENTIALS"
@@ -32,6 +34,9 @@ class ClusterInfo:
     workers: list[str] = dataclasses.field(default_factory=list)
     bmcs: list[str] = dataclasses.field(default_factory=list)
     card_type: str = ""
+
+    def to_dict(self) -> dict[str, typing.Any]:
+        return dataclasses.asdict(self)
 
 
 def _default_cred_paths(*, honor_env: bool = True) -> list[str]:
@@ -220,3 +225,131 @@ def load_cluster_info(
         validate_cluster_info(cluster_info)
 
     return cluster_info
+
+
+###############################################################################
+
+
+def parse_args() -> argparse.Namespace:
+    def regex_type(value: str) -> re.Pattern[str]:
+        try:
+            return re.compile(value)
+        except re.error as e:
+            raise argparse.ArgumentTypeError(f"Invalid regex pattern: {e}")
+
+    cred_str1 = os.environ.get(ENV_CDA_CLUSTERINFO_CREDENTIALS, None)
+    cred_str = f"{repr(cred_str1)}" if cred_str1 is not None else "unset"
+    parser = argparse.ArgumentParser(description=f"Load Cluster Info {repr(SHEET)} from {repr(URL)}")
+    parser.add_argument(
+        "-m",
+        "--mode",
+        choices=["sheet", "all", "hosts", "host", "card-type"],
+        default="all",
+        help="What information to request. Defaults to \"all\".",
+    )
+    parser.add_argument(
+        "-H",
+        "--host",
+        default=None,
+        help=f"The host for which to fetch the cluster info (needed by some modes). Defaults to {repr(common.current_host())} unless \"--cluster\" is specified.",
+    )
+    parser.add_argument(
+        "-c",
+        "--cluster",
+        default=None,
+        type=regex_type,
+        help="Similar to \"--host\" to select a cluster. This is a regular expression.",
+    )
+    parser.add_argument(
+        "--credential",
+        default=None,
+        help=f"The credential file to access the google doc. Defaults to \"$CDA_CLUSTERINFO_CREDENTIALS\" ({cred_str}) or {repr(_default_cred_paths(honor_env=False))}.",
+    )
+    parser.add_argument(
+        "--no-validate",
+        action="store_false",
+        help="Skip validation of cluster infos.",
+    )
+
+    args = parser.parse_args()
+
+    return args
+
+
+def _print_json(data: typing.Any) -> None:
+    print(json.dumps(data, indent=2))
+
+
+def process(
+    *,
+    mode: str,
+    credential: Optional[str],
+    host: Optional[str],
+    cluster: Optional[re.Pattern[str]],
+    validate: bool,
+) -> None:
+
+    if host is None and cluster is None:
+        host = common.current_host()
+
+    sheet = read_sheet(credentials=credential)
+
+    if mode == "sheet":
+        _print_json(sheet)
+        return
+
+    cluster_infos = load_all_cluster_info(sheet=sheet)
+    cluster_info: Optional[ClusterInfo] = None
+
+    if mode not in ("all", "hosts"):
+        cluster_info = load_cluster_info(
+            hostname=host,
+            cluster_infos=cluster_infos,
+            validate=False,
+            required=False,
+            try_hostname=True,
+            match_name=cluster,
+        )
+        if cluster_info is None:
+            msg_selector = ""
+            if host is not None:
+                msg_selector += f" for host {repr(host)}"
+            if cluster is not None:
+                if msg_selector:
+                    msg_selector += " or"
+                msg_selector += f" for cluster {repr(cluster.pattern)}"
+            raise RuntimeError(f"No cluster info found{msg_selector}. Select a host with \"--host\" or \"--cluster\" option?")
+
+    if validate:
+        data = cluster_infos.values() if cluster_info is None else (cluster_info,)
+        for ci in data:
+            validate_cluster_info(ci)
+
+    if mode == "all":
+        _print_json({k: v.to_dict() for k, v in cluster_infos.items()})
+    elif mode == "hosts":
+        _print_json(sorted(cluster_infos))
+    elif mode == "host":
+        assert cluster_info is not None
+        _print_json(cluster_info.to_dict())
+    elif mode == "card-type":
+        assert cluster_info is not None
+        print(cluster_info.card_type)
+    else:
+        assert False
+
+
+def main() -> None:
+    logger.setLevel(0)
+    args = parse_args()
+    process(
+        mode=args.mode,
+        credential=args.credential,
+        host=args.host,
+        cluster=args.cluster,
+        validate=not args.no_validate,
+    )
+
+
+if __name__ == "__main__":
+    main()
