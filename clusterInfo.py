@@ -31,6 +31,7 @@ class ClusterInfo:
     ipu_mac_addresses: list[str] = dataclasses.field(default_factory=list)
     workers: list[str] = dataclasses.field(default_factory=list)
     bmcs: list[str] = dataclasses.field(default_factory=list)
+    card_type: str = ""
 
     def to_dict(self) -> dict[str, typing.Any]:
         return dataclasses.asdict(self)
@@ -106,7 +107,9 @@ def load_all_cluster_info(
             break
         if "BF2" in row["Name"]:
             continue
-        if row["Card type"] == "IPU-Cluster":
+        if row["Card type"]:
+            cluster.card_type = row["Card type"]
+        if row["Card type"] in ("IPU-Cluster", "dpu", "marvell-dpu"):
             cluster.bmc_imc_hostnames.append(row["BMC/IMC hostname"])
             cluster.ipu_mac_addresses.append(row["MAC"])
             cluster.iso_server = row["ISO server"]
@@ -259,7 +262,7 @@ def _main_parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=f"Load Cluster Info {repr(SHEET)} from {repr(URL)}")
     parser.add_argument(
         "mode",
-        choices=["sheet", "all", "hosts", "host"],
+        choices=["sheet", "all", "hosts", "host", "card-type"],
         nargs="?",
         default="all",
         help="What information to request. Defaults to \"all\".",
@@ -342,6 +345,9 @@ def _main_process(
     elif mode == "host":
         assert cluster_info is not None
         _print_json(cluster_info.to_dict())
+    elif mode == "card-type":
+        assert cluster_info is not None
+        print(cluster_info.card_type)
     else:
         assert False
 
