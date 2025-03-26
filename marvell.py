@@ -70,6 +70,7 @@ def _pxeboot_marvell_dpu(name: str, bmc: BmcConfig, mac: str, ip: str, iso: str)
         f"--nm-secondary-ip-gateway={shlex.quote(ip_gateway)} "
         "--yum-repos=rhel-nightly "
         "--default-extra-packages "
+        "--octep-cp-agent-service-disable "
         f"{' '.join(ssh_key_options)} "
         f"{shlex.quote(iso)} "
         "2>&1"
