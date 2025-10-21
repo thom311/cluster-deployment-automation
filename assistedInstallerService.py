@@ -179,11 +179,12 @@ class AssistedInstallerService:
                 'url': self.get_normal_pullspec(version),
                 'version': version,
             }
-        elif re.search(r'4\.12\.0-nightly', version):
+        elif m := re.search(r'^\s*((4\.[0-9]+\.0)-nightly)\s*$', version):
+            version, v = m.groups()
             ret = {
-                'openshift_version': '4.12-multi',
+                'openshift_version': f'{v}-multi',
                 'cpu_architectures': ['x86_64', 'arm64', 'ppc64le', 's390x'],
-                'url': self.get_nightly_pullspec(version),
+                'url': self.get_nightly_pullspec(v),
                 'version': version,
             }
         elif re.search(r'4\.12\.[0-9]+', version):
@@ -200,13 +201,6 @@ class AssistedInstallerService:
                 'url': self.get_normal_pullspec(version),
                 'version': version,
             }
-        elif re.search(r'4\.13\.0-nightly', version):
-            ret = {
-                'openshift_version': '4.13-multi',
-                'cpu_architectures': ['x86_64', 'arm64', 'ppc64le', 's390x'],
-                'url': self.get_nightly_pullspec(version),
-                'version': version,
-            }
         elif re.search(r'4\.13\.[0-9]+', version):
             ret = {
                 'openshift_version': '4.13-multi',
@@ -219,13 +213,6 @@ class AssistedInstallerService:
                 'openshift_version': '4.14-multi',
                 'cpu_architectures': ['x86_64', 'arm64', 'ppc64le', 's390x'],
                 'url': self.get_normal_pullspec(version),
-                'version': version,
-            }
-        elif re.search(r'4\.14\.0-nightly', version):
-            ret = {
-                'openshift_version': '4.14-multi',
-                'cpu_architectures': ['x86_64', 'arm64', 'ppc64le', 's390x'],
-                'url': self.get_nightly_pullspec(version),
                 'version': version,
             }
         elif re.search(r'4\.14\.[0-9]+', version):
@@ -242,13 +229,6 @@ class AssistedInstallerService:
                 'url': self.get_normal_pullspec(version),
                 'version': version,
             }
-        elif re.search(r'4\.15\.0-nightly', version):
-            ret = {
-                'openshift_version': '4.15-multi',
-                'cpu_architectures': ['x86_64', 'arm64', 'ppc64le', 's390x'],
-                'url': self.get_nightly_pullspec(version),
-                'version': version,
-            }
         elif re.search(r'4\.15\.[0-9]+', version):
             ret = {
                 'openshift_version': '4.15-multi',
@@ -261,13 +241,6 @@ class AssistedInstallerService:
                 'openshift_version': '4.16-multi',
                 'cpu_architectures': ['x86_64', 'arm64', 'ppc64le', 's390x'],
                 'url': self.get_normal_pullspec(version),
-                'version': version,
-            }
-        elif re.search(r'4\.16\.0-nightly', version):
-            ret = {
-                'openshift_version': '4.16-multi',
-                'cpu_architectures': ['x86_64', 'arm64', 'ppc64le', 's390x'],
-                'url': self.get_nightly_pullspec(version),
                 'version': version,
             }
         elif re.search(r'4\.16\.[0-9]+', version):
@@ -284,13 +257,6 @@ class AssistedInstallerService:
                 'url': self.get_normal_pullspec(version),
                 'version': version,
             }
-        elif re.search(r'4\.17\.0-nightly', version):
-            ret = {
-                'openshift_version': '4.17-multi',
-                'cpu_architectures': ['x86_64', 'arm64', 'ppc64le', 's390x'],
-                'url': self.get_nightly_pullspec(version),
-                'version': version,
-            }
         elif re.search(r'4\.17\.[0-9]+', version):
             ret = {
                 'openshift_version': '4.17-multi',
@@ -303,13 +269,6 @@ class AssistedInstallerService:
                 'openshift_version': '4.18-multi',
                 'cpu_architectures': ['x86_64', 'arm64', 'ppc64le', 's390x'],
                 'url': self.get_normal_pullspec(version),
-                'version': version,
-            }
-        elif re.search(r'4\.18\.0-nightly', version):
-            ret = {
-                'openshift_version': '4.18-multi',
-                'cpu_architectures': ['x86_64', 'arm64', 'ppc64le', 's390x'],
-                'url': self.get_nightly_pullspec(version),
                 'version': version,
             }
         elif re.search(r'4\.18\.[0-9]+', version):
@@ -326,25 +285,11 @@ class AssistedInstallerService:
                 'url': self.get_normal_pullspec(version),
                 'version': version,
             }
-        elif re.search(r'4\.19\.0-nightly', version):
-            ret = {
-                'openshift_version': '4.19-multi',
-                'cpu_architectures': ['x86_64', 'arm64', 'ppc64le', 's390x'],
-                'url': self.get_nightly_pullspec(version),
-                'version': version,
-            }
         elif re.search(r'4\.19\.[0-9]+', version):
             ret = {
                 'openshift_version': '4.19-multi',
                 'cpu_architectures': ['x86_64', 'arm64', 'ppc64le', 's390x'],
                 'url': self.get_normal_pullspec(version),
-                'version': version,
-            }
-        elif re.search(r'4\.20\.0-nightly', version):
-            ret = {
-                'openshift_version': '4.20-multi',
-                'cpu_architectures': ['x86_64', 'arm64', 'ppc64le', 's390x'],
-                'url': self.get_nightly_pullspec(version),
                 'version': version,
             }
         else:
